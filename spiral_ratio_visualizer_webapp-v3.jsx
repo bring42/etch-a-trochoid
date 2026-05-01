@@ -1,0 +1,1096 @@
+import React, { useEffect, useMemo, useState } from "react";
+
+const ACCENT = "#1d4ed8";
+const HOT = "#ff3b30";
+const PAPER = "#f7f5ef";
+const INK = "#09090b";
+
+const PRESETS = [
+  { label: "96/36", ring: 96, gear: 36, offset: 0.72, mode: "inside", ink: ACCENT },
+  { label: "84/35", ring: 84, gear: 35, offset: 0.58, mode: "inside", ink: HOT },
+  { label: "105/45", ring: 105, gear: 45, offset: 0.82, mode: "inside", ink: "#111827" },
+  { label: "90/20", ring: 90, gear: 20, offset: 0.68, mode: "inside", ink: "#6d28d9" },
+  { label: "72/24", ring: 72, gear: 24, offset: 0.48, mode: "outside", ink: "#0f766e" },
+  { label: "120/32", ring: 120, gear: 32, offset: 0.9, mode: "inside", ink: "#be123c" },
+];
+
+function gcd(a, b) {
+  let x = Math.abs(Math.round(a));
+  let y = Math.abs(Math.round(b));
+  while (y !== 0) {
+    const t = y;
+    y = x % y;
+    x = t;
+  }
+  return x || 1;
+}
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function fraction(a, b) {
+  const d = gcd(a, b);
+  return `${a / d}:${b / d}`;
+}
+
+function polar(cx, cy, r, angle) {
+  return {
+    x: cx + r * Math.cos(angle),
+    y: cy + r * Math.sin(angle),
+  };
+}
+
+function pointsToPath(points) {
+  if (!points.length) return "";
+  return points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(2)} ${p.y.toFixed(2)}`).join(" ");
+}
+
+function hypotrochoidPoint(R, r, d, t) {
+  return {
+    x: (R - r) * Math.cos(t) + d * Math.cos(((R - r) / r) * t),
+    y: (R - r) * Math.sin(t) - d * Math.sin(((R - r) / r) * t),
+  };
+}
+
+function epitrochoidPoint(R, r, d, t) {
+  return {
+    x: (R + r) * Math.cos(t) - d * Math.cos(((R + r) / r) * t),
+    y: (R + r) * Math.sin(t) - d * Math.sin(((R + r) / r) * t),
+  };
+}
+
+function buildCurve({ ringTeeth, gearTeeth, penOffset, mode, phase, width, height, samples }) {
+  const cx = width / 2;
+  const cy = height / 2;
+  const R = ringTeeth;
+  const r = gearTeeth;
+  const d = penOffset * r;
+  const common = gcd(R, r);
+  const loops = r / common;
+  const maxT = Math.PI * 2 * loops;
+
+  const raw = [];
+  for (let i = 0; i <= samples; i++) {
+    const t = (i / samples) * maxT + phase;
+    raw.push(mode === "inside" ? hypotrochoidPoint(R, r, d, t) : epitrochoidPoint(R, r, d, t));
+  }
+
+  const maxAbs = raw.reduce((m, p) => Math.max(m, Math.abs(p.x), Math.abs(p.y)), 1);
+  const scale = (Math.min(width, height) * 0.375) / maxAbs;
+  const points = raw.map((p) => ({ x: cx + p.x * scale, y: cy + p.y * scale }));
+
+  return { points, R, r, d, loops, maxT, scale, cx, cy };
+}
+
+function gearPath(teeth, cx, cy, pitchRadius, toothDepth = 0.15, rootBias = 0.04, startAngle = -Math.PI / 2) {
+  const steps = Math.max(8, teeth * 2);
+  const root = pitchRadius * (1 - toothDepth - rootBias);
+  const tip = pitchRadius * (1 + toothDepth);
+  const pts = [];
+
+  for (let i = 0; i < steps; i++) {
+    const angle = startAngle + (i / steps) * Math.PI * 2;
+    const toothPhase = i % 2;
+    const radius = toothPhase === 0 ? tip : root;
+    pts.push(polar(cx, cy, radius, angle));
+  }
+
+  return `${pts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(2)} ${p.y.toFixed(2)}`).join(" ")} Z`;
+}
+
+function innerRingTeethPath(teeth, cx, cy, innerRadius, toothDepth = 0.08, startAngle = -Math.PI / 2) {
+  const steps = Math.max(8, teeth * 2);
+  const valley = innerRadius * (1 - toothDepth);
+  const crown = innerRadius * (1 + toothDepth * 0.4);
+  const pts = [];
+
+  for (let i = 0; i < steps; i++) {
+    const angle = startAngle + (i / steps) * Math.PI * 2;
+    const radius = i % 2 === 0 ? crown : valley;
+    pts.push(polar(cx, cy, radius, angle));
+  }
+
+  return `${pts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(2)} ${p.y.toFixed(2)}`).join(" ")} Z`;
+}
+
+function circlePath(cx, cy, r) {
+  return `M ${(cx - r).toFixed(2)} ${cy.toFixed(2)} A ${r.toFixed(2)} ${r.toFixed(2)} 0 1 0 ${(cx + r).toFixed(2)} ${cy.toFixed(2)} A ${r.toFixed(2)} ${r.toFixed(2)} 0 1 0 ${(cx - r).toFixed(2)} ${cy.toFixed(2)} Z`;
+}
+
+function makePenHolePoints(cx, cy, radius, count, phase = -Math.PI / 2) {
+  return Array.from({ length: count }, (_, i) => {
+    const t = count === 1 ? 0 : i / (count - 1);
+    const r = radius * (0.18 + t * 0.72);
+    return polar(cx, cy, r, phase + t * 0.42);
+  });
+}
+
+function buildMechanismSvg({ ringTeeth, gearTeeth, mode, penOffset }) {
+  const size = 900;
+  const cx = size / 2;
+  const cy = size / 2;
+  const ringR = 310;
+  const gearR = mode === "inside" ? ringR * (gearTeeth / ringTeeth) : 140;
+  const gearCx = mode === "inside" ? cx + ringR - gearR - 18 : cx + ringR + gearR + 36;
+  const gearCy = cy;
+  const outerRingR = ringR + 58;
+  const ringTeethPath = innerRingTeethPath(ringTeeth, cx, cy, ringR, 0.055);
+  const outer = circlePath(cx, cy, outerRingR);
+  const gear = gearPath(gearTeeth, gearCx, gearCy, gearR, 0.11, 0.03);
+  const penHoles = makePenHolePoints(gearCx, gearCy, gearR, 12);
+  const selectedHole = polar(gearCx, gearCy, gearR * penOffset, -Math.PI / 2 + 0.42);
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}">
+  <rect width="${size}" height="${size}" fill="white"/>
+  <g fill="none" stroke="black" stroke-width="2" vector-effect="non-scaling-stroke">
+    <path d="${outer}"/>
+    <path d="${ringTeethPath}"/>
+    <path d="${gear}"/>
+    <circle cx="${gearCx.toFixed(2)}" cy="${gearCy.toFixed(2)}" r="${(gearR * 0.18).toFixed(2)}"/>
+    ${penHoles.map((p) => `<circle cx="${p.x.toFixed(2)}" cy="${p.y.toFixed(2)}" r="5"/>`).join("
+    ")}
+    <circle cx="${selectedHole.x.toFixed(2)}" cy="${selectedHole.y.toFixed(2)}" r="9" stroke="${HOT}"/>
+  </g>
+  <g font-family="monospace" font-size="18" fill="black">
+    <text x="42" y="54">SPIROGRAPH MECHANISM EXPORT</text>
+    <text x="42" y="82">RING ${ringTeeth} / GEAR ${gearTeeth} / ${mode.toUpperCase()} / PEN ${(penOffset * 100).toFixed(0)}%</text>
+  </g>
+</svg>`;
+}
+
+function runTests() {
+  console.assert(gcd(96, 36) === 12, "gcd reduces common toy ratios");
+  console.assert(fraction(96, 36) === "8:3", "fraction simplifies ratios");
+  console.assert(clamp(120, 0, 100) === 100, "clamp max works");
+  console.assert(pointsToPath([{ x: 1, y: 2 }, { x: 3, y: 4 }]) === "M1.00 2.00 L3.00 4.00", "path conversion works");
+  const curve = buildCurve({ ringTeeth: 96, gearTeeth: 36, penOffset: 0.5, mode: "inside", phase: 0, width: 500, height: 500, samples: 300 });
+  console.assert(curve.points.length === 301, "curve point count includes end point");
+  console.assert(gearPath(20, 100, 100, 50).startsWith("M"), "gear path is valid SVG path data");
+}
+
+if (typeof console !== "undefined") runTests();
+
+function downloadText(filename, text, type = "image/svg+xml;charset=utf-8") {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+function Panel({ children, className = "" }) {
+  return <section className={`border border-zinc-300 bg-[#fbfaf7] shadow-[8px_8px_0_#09090b] ${className}`}>{children}</section>;
+}
+
+function MicroLabel({ children }) {
+  return <div className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-zinc-500">{children}</div>;
+}
+
+function RangeControl({ label, value, min, max, step, onChange, suffix = "" }) {
+  return (
+    <label className="grid gap-1.5 border-t border-zinc-200 pt-2">
+      <span className="flex items-center justify-between gap-3 font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500">
+        <span>{label}</span>
+        <span className="text-zinc-950">{value}{suffix}</span>
+      </span>
+      <input
+        className="h-1.5 w-full appearance-none rounded-none bg-zinc-300 accent-zinc-950"
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+    </label>
+  );
+}
+
+function ToggleButton({ active, children, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`border px-3 py-2 font-mono text-[11px] font-black uppercase tracking-[0.12em] transition ${
+        active ? "border-zinc-950 bg-zinc-950 text-white" : "border-zinc-300 bg-white text-zinc-600 hover:border-zinc-950"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function SpiroArtboard({ ringTeeth, gearTeeth, penOffset, mode, phase, progress, showMechanism, showTeeth, inkColor }) {
+  const width = 720;
+  const height = 720;
+
+  const curve = useMemo(
+    () => buildCurve({ ringTeeth, gearTeeth, penOffset, mode, phase, width, height, samples: 3000 }),
+    [ringTeeth, gearTeeth, penOffset, mode, phase]
+  );
+
+  const visibleCount = Math.max(2, Math.floor(curve.points.length * progress));
+  const visiblePoints = curve.points.slice(0, visibleCount);
+  const fullPath = pointsToPath(curve.points);
+  const visiblePath = pointsToPath(visiblePoints);
+  const penPoint = visiblePoints[visiblePoints.length - 1] || curve.points[0];
+
+  const t = curve.maxT * progress + phase;
+  const R = curve.R;
+  const r = curve.r;
+  const cx = curve.cx;
+  const cy = curve.cy;
+  const scale = curve.scale;
+
+  const gearCenterRaw = mode === "inside"
+    ? { x: (R - r) * Math.cos(t), y: (R - r) * Math.sin(t) }
+    : { x: (R + r) * Math.cos(t), y: (R + r) * Math.sin(t) };
+
+  const gearSpin = mode === "inside" ? -((R - r) / r) * t : -((R + r) / r) * t;
+  const gearCenter = { x: cx + gearCenterRaw.x * scale, y: cy + gearCenterRaw.y * scale };
+  const ringRadiusPx = R * scale;
+  const gearRadiusPx = r * scale;
+  const penRadiusPx = penOffset * r * scale;
+  const penPreview = {
+    x: gearCenter.x + penRadiusPx * Math.cos(gearSpin),
+    y: gearCenter.y + penRadiusPx * Math.sin(gearSpin),
+  };
+
+  const ringPath = innerRingTeethPath(ringTeeth, cx, cy, ringRadiusPx, 0.045);
+  const gearOutline = gearPath(gearTeeth, gearCenter.x, gearCenter.y, gearRadiusPx, 0.08, 0.02, gearSpin - Math.PI / 2);
+  const holePoints = makePenHolePoints(gearCenter.x, gearCenter.y, gearRadiusPx, 10, gearSpin - Math.PI / 2);
+
+  return (
+    <div className="relative h-full min-h-[360px] w-full overflow-hidden border border-zinc-950 bg-[#f7f5ef] shadow-[10px_10px_0_#09090b] md:min-h-0">
+      <svg id="spiro-artboard" viewBox={`0 0 ${width} ${height}`} className="h-full w-full" role="img" aria-label="Spirograph ratio drawing preview">
+        <defs>
+          <pattern id="microGrid" width="24" height="24" patternUnits="userSpaceOnUse">
+            <path d="M 24 0 L 0 0 0 24" fill="none" stroke="#d8d5cc" strokeWidth="1" />
+          </pattern>
+          <filter id="inkBleed" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="0.35" />
+          </filter>
+        </defs>
+
+        <rect width={width} height={height} fill={PAPER} />
+        <rect width={width} height={height} fill="url(#microGrid)" opacity="0.7" />
+
+        <g opacity="0.6">
+          {Array.from({ length: 9 }).map((_, i) => (
+            <circle key={i} cx={cx} cy={cy} r={54 + i * 32} fill="none" stroke="#c9c5ba" strokeWidth="1" strokeDasharray="1 9" />
+          ))}
+          {Array.from({ length: 32 }).map((_, i) => {
+            const a = (i / 32) * Math.PI * 2;
+            const p1 = polar(cx, cy, 28, a);
+            const p2 = polar(cx, cy, 325, a);
+            return <line key={i} x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y} stroke="#d6d2c7" strokeWidth="1" />;
+          })}
+        </g>
+
+        <g transform="translate(28 34)">
+          <text fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace" fontSize="11" fontWeight="800" letterSpacing="3" fill="#52525b">
+            RATIO_LAB / DRAWING_GEAR_SYSTEM
+          </text>
+          <text y="39" fontFamily="Inter, ui-sans-serif, system-ui" fontSize="42" fontWeight="950" letterSpacing="-3" fill={INK}>
+            {ringTeeth}:{gearTeeth}
+          </text>
+          <rect x="0" y="54" width="140" height="7" fill={inkColor} />
+          <text y="82" fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace" fontSize="11" fontWeight="800" letterSpacing="2" fill="#52525b">
+            REDUCED {fraction(ringTeeth, gearTeeth)} / {mode.toUpperCase()} / {curve.loops} LOOP CLOSURE
+          </text>
+        </g>
+
+        <circle cx={cx} cy={cy} r={ringRadiusPx} fill="none" stroke="#111827" strokeWidth="1.7" />
+
+        {showMechanism && (
+          <g opacity="0.95">
+            {showTeeth ? (
+              <path d={ringPath} fill="none" stroke="#111827" strokeWidth="1.2" strokeLinejoin="miter" />
+            ) : (
+              <circle cx={cx} cy={cy} r={ringRadiusPx} fill="none" stroke="#111827" strokeWidth="1.2" strokeDasharray="3 7" />
+            )}
+            {showTeeth ? (
+              <path d={gearOutline} fill="rgba(255,255,255,0.38)" stroke="#111827" strokeWidth="1.35" strokeLinejoin="miter" />
+            ) : (
+              <circle cx={gearCenter.x} cy={gearCenter.y} r={gearRadiusPx} fill="rgba(255,255,255,0.35)" stroke="#111827" strokeWidth="1.35" />
+            )}
+            <circle cx={gearCenter.x} cy={gearCenter.y} r={Math.max(3, gearRadiusPx * 0.08)} fill="none" stroke="#111827" strokeWidth="1" />
+            {holePoints.map((p, i) => (
+              <circle key={i} cx={p.x} cy={p.y} r={Math.max(2, gearRadiusPx * 0.018)} fill={i % 3 === 0 ? HOT : "#111827"} opacity="0.85" />
+            ))}
+            <line x1={gearCenter.x} y1={gearCenter.y} x2={penPreview.x} y2={penPreview.y} stroke="#111827" strokeWidth="2" />
+            <circle cx={penPreview.x} cy={penPreview.y} r="6" fill={HOT} stroke="#111827" strokeWidth="1" />
+          </g>
+        )}
+
+        <path d={fullPath} fill="none" stroke={inkColor} strokeOpacity="0.13" strokeWidth="2.2" />
+        <path d={visiblePath} fill="none" stroke={INK} strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" filter="url(#inkBleed)" />
+        <path d={visiblePath} fill="none" stroke={inkColor} strokeWidth="0.85" strokeLinecap="round" strokeLinejoin="round" />
+        <circle cx={penPoint.x} cy={penPoint.y} r="5" fill={HOT} stroke={INK} strokeWidth="1.2" />
+
+        <g transform="translate(28 670)">
+          <text fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace" fontSize="10" fontWeight="800" letterSpacing="2" fill="#52525b">
+            PEN_OFFSET {(penOffset * 100).toFixed(0)}% / PROGRESS {(progress * 100).toFixed(0)}% / TEETH_OVERLAY {showTeeth ? "ON" : "OFF"}
+          </text>
+        </g>
+      </svg>
+    </div>
+  );
+}
+
+export default function SpirographRatioLab() {
+  const [mode, setMode] = useState("inside");
+  const [ringTeeth, setRingTeeth] = useState(96);
+  const [gearTeeth, setGearTeeth] = useState(36);
+  const [penOffset, setPenOffset] = useState(0.72);
+  const [phase, setPhase] = useState(0);
+  const [progress, setProgress] = useState(1);
+  const [animate, setAnimate] = useState(false);
+  const [showMechanism, setShowMechanism] = useState(false);
+  const [showTeeth, setShowTeeth] = useState(true);
+  const [inkColor, setInkColor] = useState(ACCENT);
+
+  useEffect(() => {
+    if (!animate) {
+      setProgress(1);
+      return undefined;
+    }
+
+    let frame = 0;
+    let raf = 0;
+    const tick = () => {
+      frame += 1;
+      const loop = (frame % 260) / 260;
+      setProgress(clamp(loop, 0.015, 1));
+      raf = requestAnimationFrame(tick);
+    };
+
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [animate]);
+
+  const maxGear = mode === "inside" ? Math.max(8, ringTeeth - 4) : 120;
+  const reduced = fraction(ringTeeth, gearTeeth);
+  const closure = gearTeeth / gcd(ringTeeth, gearTeeth);
+
+  function applyPreset(preset) {
+    setRingTeeth(preset.ring);
+    setGearTeeth(preset.gear);
+    setPenOffset(preset.offset);
+    setMode(preset.mode);
+    setInkColor(preset.ink);
+    setProgress(1);
+  }
+
+  function exportDrawingSvg() {
+    const svg = document.getElementById("spiro-artboard");
+    if (!svg) return;
+    const clone = svg.cloneNode(true);
+    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    downloadText(`spirograph-drawing-${ringTeeth}-${gearTeeth}.svg`, clone.outerHTML);
+  }
+
+  function exportMechanismSvg() {
+    const svg = buildMechanismSvg({ ringTeeth, gearTeeth, mode, penOffset });
+    downloadText(`spirograph-ring-gear-${ringTeeth}-${gearTeeth}.svg`, svg);
+  }
+
+  function reset() {
+    setMode("inside");
+    setRingTeeth(96);
+    setGearTeeth(36);
+    setPenOffset(0.72);
+    setPhase(0);
+    setProgress(1);
+    setAnimate(false);
+    setShowMechanism(false);
+    setShowTeeth(true);
+    setInkColor(ACCENT);
+  }
+
+  return (
+    <main className="min-h-screen bg-[#ece8df] text-zinc-950">
+      <div className="mx-auto grid min-h-screen w-full max-w-[1500px] gap-3 p-3 lg:grid-cols-[minmax(0,1fr)_430px] lg:p-4">
+        <section className="sticky top-3 z-10 h-[62vh] min-h-[360px] lg:h-[calc(100vh-2rem)]">
+          <SpiroArtboard
+            ringTeeth={ringTeeth}
+            gearTeeth={gearTeeth}
+            penOffset={penOffset}
+            mode={mode}
+            phase={phase}
+            progress={progress}
+            showMechanism={showMechanism}
+            showTeeth={showTeeth}
+            inkColor={inkColor}
+          />
+        </section>
+
+        <aside className="grid content-start gap-3 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto lg:pr-2">
+          <Panel>
+            <div className="grid gap-3 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <MicroLabel>spirograph ratio terminal</MicroLabel>
+                  <h1 className="mt-1 text-3xl font-black uppercase leading-none tracking-[-0.08em] sm:text-4xl">Gear Pattern Lab</h1>
+                </div>
+                <div className="border border-zinc-950 bg-zinc-950 px-3 py-2 font-mono text-xs font-black text-white shadow-[4px_4px_0_#ff3b30]">
+                  {mode}
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-2 border-t border-zinc-300 pt-3 font-mono text-[11px] font-bold uppercase tracking-[0.12em]">
+                <div><span className="text-zinc-500">ratio</span><br />{ringTeeth}:{gearTeeth}</div>
+                <div><span className="text-zinc-500">reduced</span><br />{reduced}</div>
+                <div><span className="text-zinc-500">closure</span><br />{closure} turns</div>
+              </div>
+            </div>
+          </Panel>
+
+          <Panel>
+            <div className="grid gap-3 p-4">
+              <MicroLabel>fast presets</MicroLabel>
+              <div className="grid grid-cols-3 gap-2">
+                {PRESETS.map((preset) => (
+                  <button
+                    key={preset.label}
+                    onClick={() => applyPreset(preset)}
+                    className="border border-zinc-300 bg-white p-2 text-left transition hover:border-zinc-950 hover:bg-zinc-950 hover:text-white"
+                  >
+                    <div className="font-mono text-xs font-black">{preset.label}</div>
+                    <div className="mt-1 h-1.5 w-10" style={{ backgroundColor: preset.ink }} />
+                    <div className="mt-1 font-mono text-[9px] uppercase tracking-widest text-zinc-500">{preset.mode}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </Panel>
+
+          <Panel>
+            <div className="grid gap-3 p-4">
+              <MicroLabel>machine mode</MicroLabel>
+              <div className="grid grid-cols-2 gap-2">
+                <ToggleButton active={mode === "inside"} onClick={() => {
+                  setMode("inside");
+                  if (gearTeeth >= ringTeeth) setGearTeeth(Math.max(8, ringTeeth - 4));
+                }}>inside</ToggleButton>
+                <ToggleButton active={mode === "outside"} onClick={() => setMode("outside")}>outside</ToggleButton>
+                <ToggleButton active={showMechanism} onClick={() => setShowMechanism((v) => !v)}>overlay</ToggleButton>
+                <ToggleButton active={showTeeth} onClick={() => setShowTeeth((v) => !v)}>teeth</ToggleButton>
+              </div>
+
+              <RangeControl
+                label="ring teeth"
+                value={ringTeeth}
+                min={24}
+                max={180}
+                step={1}
+                onChange={(v) => {
+                  setRingTeeth(v);
+                  if (mode === "inside" && gearTeeth >= v) setGearTeeth(Math.max(8, v - 4));
+                }}
+              />
+              <RangeControl label="gear teeth" value={gearTeeth} min={8} max={maxGear} step={1} onChange={setGearTeeth} />
+              <RangeControl label="pen offset" value={Math.round(penOffset * 100)} min={0} max={100} step={1} suffix="%" onChange={(v) => setPenOffset(v / 100)} />
+              <RangeControl label="phase" value={Math.round((phase * 180) / Math.PI)} min={0} max={360} step={1} suffix="°" onChange={(v) => setPhase((v * Math.PI) / 180)} />
+              {!animate && <RangeControl label="draw progress" value={Math.round(progress * 100)} min={1} max={100} step={1} suffix="%" onChange={(v) => setProgress(v / 100)} />}
+            </div>
+          </Panel>
+
+          <Panel>
+            <div className="grid gap-3 p-4">
+              <MicroLabel>ink channel</MicroLabel>
+              <div className="grid grid-cols-6 gap-2">
+                {[ACCENT, HOT, "#111827", "#6d28d9", "#0f766e", "#be123c"].map((color) => (
+                  <button
+                    key={color}
+                    aria-label={`Set ink color ${color}`}
+                    onClick={() => setInkColor(color)}
+                    className={`h-9 border ${inkColor === color ? "border-zinc-950 ring-2 ring-zinc-950" : "border-zinc-300"}`}
+                    style={{ backgroundColor: color }}
+                  />
+                ))}
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <button onClick={() => setAnimate((v) => !v)} className="border border-zinc-950 bg-zinc-950 px-3 py-3 font-mono text-xs font-black uppercase tracking-widest text-white hover:bg-white hover:text-zinc-950">
+                  {animate ? "stop draw" : "animate"}
+                </button>
+                <button onClick={reset} className="border border-zinc-950 bg-white px-3 py-3 font-mono text-xs font-black uppercase tracking-widest text-zinc-950 hover:bg-zinc-950 hover:text-white">
+                  reset
+                </button>
+              </div>
+            </div>
+          </Panel>
+
+          <section className="border border-zinc-950 bg-zinc-950 text-white shadow-[8px_8px_0_#ff3b30]">
+            <div className="grid gap-3 p-4">
+              <MicroLabel>svg output</MicroLabel>
+              <div className="grid grid-cols-2 gap-2">
+                <button onClick={exportDrawingSvg} className="border border-white/30 bg-white px-3 py-3 font-mono text-xs font-black uppercase tracking-widest text-zinc-950 hover:bg-zinc-200">
+                  export drawing
+                </button>
+                <button onClick={exportMechanismSvg} className="border border-white/30 bg-zinc-900 px-3 py-3 font-mono text-xs font-black uppercase tracking-widest text-white hover:bg-zinc-800">
+                  export gear/ring
+                </button>
+              </div>
+              <p className="font-mono text-[10px] uppercase leading-5 tracking-[0.16em] text-zinc-400">
+                Gear/ring SVG is schematic tooth geometry for iteration and fabrication planning. Drawing SVG exports the current visible artboard.
+              </p>
+            </div>
+          </section>
+        </aside>
+      </div>
+    </main>
+  );
+}
+import React, { useEffect, useMemo, useState } from "react";
+
+const ACCENT = "#1d4ed8";
+const HOT = "#ff3b30";
+const PAPER = "#f7f5ef";
+const INK = "#09090b";
+
+const PRESETS = [
+  { label: "96/36", ring: 96, gear: 36, offset: 0.72, mode: "inside", ink: ACCENT },
+  { label: "84/35", ring: 84, gear: 35, offset: 0.58, mode: "inside", ink: HOT },
+  { label: "105/45", ring: 105, gear: 45, offset: 0.82, mode: "inside", ink: "#111827" },
+  { label: "90/20", ring: 90, gear: 20, offset: 0.68, mode: "inside", ink: "#6d28d9" },
+  { label: "72/24", ring: 72, gear: 24, offset: 0.48, mode: "outside", ink: "#0f766e" },
+  { label: "120/32", ring: 120, gear: 32, offset: 0.9, mode: "inside", ink: "#be123c" },
+];
+
+function gcd(a, b) {
+  let x = Math.abs(Math.round(a));
+  let y = Math.abs(Math.round(b));
+  while (y !== 0) {
+    const t = y;
+    y = x % y;
+    x = t;
+  }
+  return x || 1;
+}
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function fraction(a, b) {
+  const d = gcd(a, b);
+  return `${a / d}:${b / d}`;
+}
+
+function polar(cx, cy, r, angle) {
+  return {
+    x: cx + r * Math.cos(angle),
+    y: cy + r * Math.sin(angle),
+  };
+}
+
+function pointsToPath(points) {
+  if (!points.length) return "";
+  return points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(2)} ${p.y.toFixed(2)}`).join(" ");
+}
+
+function hypotrochoidPoint(R, r, d, t) {
+  return {
+    x: (R - r) * Math.cos(t) + d * Math.cos(((R - r) / r) * t),
+    y: (R - r) * Math.sin(t) - d * Math.sin(((R - r) / r) * t),
+  };
+}
+
+function epitrochoidPoint(R, r, d, t) {
+  return {
+    x: (R + r) * Math.cos(t) - d * Math.cos(((R + r) / r) * t),
+    y: (R + r) * Math.sin(t) - d * Math.sin(((R + r) / r) * t),
+  };
+}
+
+function buildCurve({ ringTeeth, gearTeeth, penOffset, mode, phase, width, height, samples }) {
+  const cx = width / 2;
+  const cy = height / 2;
+  const R = ringTeeth;
+  const r = gearTeeth;
+  const d = penOffset * r;
+  const common = gcd(R, r);
+  const loops = r / common;
+  const maxT = Math.PI * 2 * loops;
+
+  const raw = [];
+  for (let i = 0; i <= samples; i++) {
+    const t = (i / samples) * maxT + phase;
+    raw.push(mode === "inside" ? hypotrochoidPoint(R, r, d, t) : epitrochoidPoint(R, r, d, t));
+  }
+
+  const maxAbs = raw.reduce((m, p) => Math.max(m, Math.abs(p.x), Math.abs(p.y)), 1);
+  const scale = (Math.min(width, height) * 0.375) / maxAbs;
+  const points = raw.map((p) => ({ x: cx + p.x * scale, y: cy + p.y * scale }));
+
+  return { points, R, r, d, loops, maxT, scale, cx, cy };
+}
+
+function gearPath(teeth, cx, cy, pitchRadius, toothDepth = 0.15, rootBias = 0.04, startAngle = -Math.PI / 2) {
+  const steps = Math.max(8, teeth * 2);
+  const root = pitchRadius * (1 - toothDepth - rootBias);
+  const tip = pitchRadius * (1 + toothDepth);
+  const pts = [];
+
+  for (let i = 0; i < steps; i++) {
+    const angle = startAngle + (i / steps) * Math.PI * 2;
+    const toothPhase = i % 2;
+    const radius = toothPhase === 0 ? tip : root;
+    pts.push(polar(cx, cy, radius, angle));
+  }
+
+  return `${pts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(2)} ${p.y.toFixed(2)}`).join(" ")} Z`;
+}
+
+function innerRingTeethPath(teeth, cx, cy, innerRadius, toothDepth = 0.08, startAngle = -Math.PI / 2) {
+  const steps = Math.max(8, teeth * 2);
+  const valley = innerRadius * (1 - toothDepth);
+  const crown = innerRadius * (1 + toothDepth * 0.4);
+  const pts = [];
+
+  for (let i = 0; i < steps; i++) {
+    const angle = startAngle + (i / steps) * Math.PI * 2;
+    const radius = i % 2 === 0 ? crown : valley;
+    pts.push(polar(cx, cy, radius, angle));
+  }
+
+  return `${pts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(2)} ${p.y.toFixed(2)}`).join(" ")} Z`;
+}
+
+function circlePath(cx, cy, r) {
+  return `M ${(cx - r).toFixed(2)} ${cy.toFixed(2)} A ${r.toFixed(2)} ${r.toFixed(2)} 0 1 0 ${(cx + r).toFixed(2)} ${cy.toFixed(2)} A ${r.toFixed(2)} ${r.toFixed(2)} 0 1 0 ${(cx - r).toFixed(2)} ${cy.toFixed(2)} Z`;
+}
+
+function makePenHolePoints(cx, cy, radius, count, phase = -Math.PI / 2) {
+  return Array.from({ length: count }, (_, i) => {
+    const t = count === 1 ? 0 : i / (count - 1);
+    const r = radius * (0.18 + t * 0.72);
+    return polar(cx, cy, r, phase + t * 0.42);
+  });
+}
+
+function buildMechanismSvg({ ringTeeth, gearTeeth, mode, penOffset }) {
+  const size = 900;
+  const cx = size / 2;
+  const cy = size / 2;
+  const ringR = 310;
+  const gearR = mode === "inside" ? ringR * (gearTeeth / ringTeeth) : 140;
+  const gearCx = mode === "inside" ? cx + ringR - gearR - 18 : cx + ringR + gearR + 36;
+  const gearCy = cy;
+  const outerRingR = ringR + 58;
+  const ringTeethPath = innerRingTeethPath(ringTeeth, cx, cy, ringR, 0.055);
+  const outer = circlePath(cx, cy, outerRingR);
+  const gear = gearPath(gearTeeth, gearCx, gearCy, gearR, 0.11, 0.03);
+  const penHoles = makePenHolePoints(gearCx, gearCy, gearR, 12);
+  const selectedHole = polar(gearCx, gearCy, gearR * penOffset, -Math.PI / 2 + 0.42);
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}">
+  <rect width="${size}" height="${size}" fill="white"/>
+  <g fill="none" stroke="black" stroke-width="2" vector-effect="non-scaling-stroke">
+    <path d="${outer}"/>
+    <path d="${ringTeethPath}"/>
+    <path d="${gear}"/>
+    <circle cx="${gearCx.toFixed(2)}" cy="${gearCy.toFixed(2)}" r="${(gearR * 0.18).toFixed(2)}"/>
+    ${penHoles.map((p) => `<circle cx="${p.x.toFixed(2)}" cy="${p.y.toFixed(2)}" r="5"/>`).join("
+    ")}
+    <circle cx="${selectedHole.x.toFixed(2)}" cy="${selectedHole.y.toFixed(2)}" r="9" stroke="${HOT}"/>
+  </g>
+  <g font-family="monospace" font-size="18" fill="black">
+    <text x="42" y="54">SPIROGRAPH MECHANISM EXPORT</text>
+    <text x="42" y="82">RING ${ringTeeth} / GEAR ${gearTeeth} / ${mode.toUpperCase()} / PEN ${(penOffset * 100).toFixed(0)}%</text>
+  </g>
+</svg>`;
+}
+
+function runTests() {
+  console.assert(gcd(96, 36) === 12, "gcd reduces common toy ratios");
+  console.assert(fraction(96, 36) === "8:3", "fraction simplifies ratios");
+  console.assert(clamp(120, 0, 100) === 100, "clamp max works");
+  console.assert(pointsToPath([{ x: 1, y: 2 }, { x: 3, y: 4 }]) === "M1.00 2.00 L3.00 4.00", "path conversion works");
+  const curve = buildCurve({ ringTeeth: 96, gearTeeth: 36, penOffset: 0.5, mode: "inside", phase: 0, width: 500, height: 500, samples: 300 });
+  console.assert(curve.points.length === 301, "curve point count includes end point");
+  console.assert(gearPath(20, 100, 100, 50).startsWith("M"), "gear path is valid SVG path data");
+}
+
+if (typeof console !== "undefined") runTests();
+
+function downloadText(filename, text, type = "image/svg+xml;charset=utf-8") {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+function Panel({ children, className = "" }) {
+  return <section className={`border border-zinc-300 bg-[#fbfaf7] shadow-[8px_8px_0_#09090b] ${className}`}>{children}</section>;
+}
+
+function MicroLabel({ children }) {
+  return <div className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-zinc-500">{children}</div>;
+}
+
+function RangeControl({ label, value, min, max, step, onChange, suffix = "" }) {
+  return (
+    <label className="grid gap-1.5 border-t border-zinc-200 pt-2">
+      <span className="flex items-center justify-between gap-3 font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500">
+        <span>{label}</span>
+        <span className="text-zinc-950">{value}{suffix}</span>
+      </span>
+      <input
+        className="h-1.5 w-full appearance-none rounded-none bg-zinc-300 accent-zinc-950"
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+    </label>
+  );
+}
+
+function ToggleButton({ active, children, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`border px-3 py-2 font-mono text-[11px] font-black uppercase tracking-[0.12em] transition ${
+        active ? "border-zinc-950 bg-zinc-950 text-white" : "border-zinc-300 bg-white text-zinc-600 hover:border-zinc-950"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function SpiroArtboard({ ringTeeth, gearTeeth, penOffset, mode, phase, progress, showMechanism, showTeeth, inkColor }) {
+  const width = 720;
+  const height = 720;
+
+  const curve = useMemo(
+    () => buildCurve({ ringTeeth, gearTeeth, penOffset, mode, phase, width, height, samples: 3000 }),
+    [ringTeeth, gearTeeth, penOffset, mode, phase]
+  );
+
+  const visibleCount = Math.max(2, Math.floor(curve.points.length * progress));
+  const visiblePoints = curve.points.slice(0, visibleCount);
+  const fullPath = pointsToPath(curve.points);
+  const visiblePath = pointsToPath(visiblePoints);
+  const penPoint = visiblePoints[visiblePoints.length - 1] || curve.points[0];
+
+  const t = curve.maxT * progress + phase;
+  const R = curve.R;
+  const r = curve.r;
+  const cx = curve.cx;
+  const cy = curve.cy;
+  const scale = curve.scale;
+
+  const gearCenterRaw = mode === "inside"
+    ? { x: (R - r) * Math.cos(t), y: (R - r) * Math.sin(t) }
+    : { x: (R + r) * Math.cos(t), y: (R + r) * Math.sin(t) };
+
+  const gearSpin = mode === "inside" ? -((R - r) / r) * t : -((R + r) / r) * t;
+  const gearCenter = { x: cx + gearCenterRaw.x * scale, y: cy + gearCenterRaw.y * scale };
+  const ringRadiusPx = R * scale;
+  const gearRadiusPx = r * scale;
+  const penRadiusPx = penOffset * r * scale;
+  const penPreview = {
+    x: gearCenter.x + penRadiusPx * Math.cos(gearSpin),
+    y: gearCenter.y + penRadiusPx * Math.sin(gearSpin),
+  };
+
+  const ringPath = innerRingTeethPath(ringTeeth, cx, cy, ringRadiusPx, 0.045);
+  const gearOutline = gearPath(gearTeeth, gearCenter.x, gearCenter.y, gearRadiusPx, 0.08, 0.02, gearSpin - Math.PI / 2);
+  const holePoints = makePenHolePoints(gearCenter.x, gearCenter.y, gearRadiusPx, 10, gearSpin - Math.PI / 2);
+
+  return (
+    <div className="relative h-full min-h-[360px] w-full overflow-hidden border border-zinc-950 bg-[#f7f5ef] shadow-[10px_10px_0_#09090b] md:min-h-0">
+      <svg id="spiro-artboard" viewBox={`0 0 ${width} ${height}`} className="h-full w-full" role="img" aria-label="Spirograph ratio drawing preview">
+        <defs>
+          <pattern id="microGrid" width="24" height="24" patternUnits="userSpaceOnUse">
+            <path d="M 24 0 L 0 0 0 24" fill="none" stroke="#d8d5cc" strokeWidth="1" />
+          </pattern>
+          <filter id="inkBleed" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="0.35" />
+          </filter>
+        </defs>
+
+        <rect width={width} height={height} fill={PAPER} />
+        <rect width={width} height={height} fill="url(#microGrid)" opacity="0.7" />
+
+        <g opacity="0.6">
+          {Array.from({ length: 9 }).map((_, i) => (
+            <circle key={i} cx={cx} cy={cy} r={54 + i * 32} fill="none" stroke="#c9c5ba" strokeWidth="1" strokeDasharray="1 9" />
+          ))}
+          {Array.from({ length: 32 }).map((_, i) => {
+            const a = (i / 32) * Math.PI * 2;
+            const p1 = polar(cx, cy, 28, a);
+            const p2 = polar(cx, cy, 325, a);
+            return <line key={i} x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y} stroke="#d6d2c7" strokeWidth="1" />;
+          })}
+        </g>
+
+        <g transform="translate(28 34)">
+          <text fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace" fontSize="11" fontWeight="800" letterSpacing="3" fill="#52525b">
+            RATIO_LAB / DRAWING_GEAR_SYSTEM
+          </text>
+          <text y="39" fontFamily="Inter, ui-sans-serif, system-ui" fontSize="42" fontWeight="950" letterSpacing="-3" fill={INK}>
+            {ringTeeth}:{gearTeeth}
+          </text>
+          <rect x="0" y="54" width="140" height="7" fill={inkColor} />
+          <text y="82" fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace" fontSize="11" fontWeight="800" letterSpacing="2" fill="#52525b">
+            REDUCED {fraction(ringTeeth, gearTeeth)} / {mode.toUpperCase()} / {curve.loops} LOOP CLOSURE
+          </text>
+        </g>
+
+        <circle cx={cx} cy={cy} r={ringRadiusPx} fill="none" stroke="#111827" strokeWidth="1.7" />
+
+        {showMechanism && (
+          <g opacity="0.95">
+            {showTeeth ? (
+              <path d={ringPath} fill="none" stroke="#111827" strokeWidth="1.2" strokeLinejoin="miter" />
+            ) : (
+              <circle cx={cx} cy={cy} r={ringRadiusPx} fill="none" stroke="#111827" strokeWidth="1.2" strokeDasharray="3 7" />
+            )}
+            {showTeeth ? (
+              <path d={gearOutline} fill="rgba(255,255,255,0.38)" stroke="#111827" strokeWidth="1.35" strokeLinejoin="miter" />
+            ) : (
+              <circle cx={gearCenter.x} cy={gearCenter.y} r={gearRadiusPx} fill="rgba(255,255,255,0.35)" stroke="#111827" strokeWidth="1.35" />
+            )}
+            <circle cx={gearCenter.x} cy={gearCenter.y} r={Math.max(3, gearRadiusPx * 0.08)} fill="none" stroke="#111827" strokeWidth="1" />
+            {holePoints.map((p, i) => (
+              <circle key={i} cx={p.x} cy={p.y} r={Math.max(2, gearRadiusPx * 0.018)} fill={i % 3 === 0 ? HOT : "#111827"} opacity="0.85" />
+            ))}
+            <line x1={gearCenter.x} y1={gearCenter.y} x2={penPreview.x} y2={penPreview.y} stroke="#111827" strokeWidth="2" />
+            <circle cx={penPreview.x} cy={penPreview.y} r="6" fill={HOT} stroke="#111827" strokeWidth="1" />
+          </g>
+        )}
+
+        <path d={fullPath} fill="none" stroke={inkColor} strokeOpacity="0.13" strokeWidth="2.2" />
+        <path d={visiblePath} fill="none" stroke={INK} strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" filter="url(#inkBleed)" />
+        <path d={visiblePath} fill="none" stroke={inkColor} strokeWidth="0.85" strokeLinecap="round" strokeLinejoin="round" />
+        <circle cx={penPoint.x} cy={penPoint.y} r="5" fill={HOT} stroke={INK} strokeWidth="1.2" />
+
+        <g transform="translate(28 670)">
+          <text fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace" fontSize="10" fontWeight="800" letterSpacing="2" fill="#52525b">
+            PEN_OFFSET {(penOffset * 100).toFixed(0)}% / PROGRESS {(progress * 100).toFixed(0)}% / TEETH_OVERLAY {showTeeth ? "ON" : "OFF"}
+          </text>
+        </g>
+      </svg>
+    </div>
+  );
+}
+
+export default function SpirographRatioLab() {
+  const [mode, setMode] = useState("inside");
+  const [ringTeeth, setRingTeeth] = useState(96);
+  const [gearTeeth, setGearTeeth] = useState(36);
+  const [penOffset, setPenOffset] = useState(0.72);
+  const [phase, setPhase] = useState(0);
+  const [progress, setProgress] = useState(1);
+  const [animate, setAnimate] = useState(false);
+  const [showMechanism, setShowMechanism] = useState(true);
+  const [showTeeth, setShowTeeth] = useState(true);
+  const [inkColor, setInkColor] = useState(ACCENT);
+
+  useEffect(() => {
+    if (!animate) {
+      setProgress(1);
+      return undefined;
+    }
+
+    let frame = 0;
+    let raf = 0;
+    const tick = () => {
+      frame += 1;
+      const loop = (frame % 260) / 260;
+      setProgress(clamp(loop, 0.015, 1));
+      raf = requestAnimationFrame(tick);
+    };
+
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [animate]);
+
+  const maxGear = mode === "inside" ? Math.max(8, ringTeeth - 4) : 120;
+  const reduced = fraction(ringTeeth, gearTeeth);
+  const closure = gearTeeth / gcd(ringTeeth, gearTeeth);
+
+  function applyPreset(preset) {
+    setRingTeeth(preset.ring);
+    setGearTeeth(preset.gear);
+    setPenOffset(preset.offset);
+    setMode(preset.mode);
+    setInkColor(preset.ink);
+    setProgress(1);
+  }
+
+  function exportDrawingSvg() {
+    const svg = document.getElementById("spiro-artboard");
+    if (!svg) return;
+    const clone = svg.cloneNode(true);
+    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    downloadText(`spirograph-drawing-${ringTeeth}-${gearTeeth}.svg`, clone.outerHTML);
+  }
+
+  function exportMechanismSvg() {
+    const svg = buildMechanismSvg({ ringTeeth, gearTeeth, mode, penOffset });
+    downloadText(`spirograph-ring-gear-${ringTeeth}-${gearTeeth}.svg`, svg);
+  }
+
+  function reset() {
+    setMode("inside");
+    setRingTeeth(96);
+    setGearTeeth(36);
+    setPenOffset(0.72);
+    setPhase(0);
+    setProgress(1);
+    setAnimate(false);
+    setShowMechanism(true);
+    setShowTeeth(true);
+    setInkColor(ACCENT);
+  }
+
+  return (
+    <main className="min-h-screen bg-[#ece8df] text-zinc-950">
+      <div className="mx-auto grid min-h-screen w-full max-w-[1500px] gap-3 p-3 lg:grid-cols-[minmax(0,1fr)_430px] lg:p-4">
+        <section className="sticky top-3 z-10 h-[62vh] min-h-[360px] lg:h-[calc(100vh-2rem)]">
+          <SpiroArtboard
+            ringTeeth={ringTeeth}
+            gearTeeth={gearTeeth}
+            penOffset={penOffset}
+            mode={mode}
+            phase={phase}
+            progress={progress}
+            showMechanism={showMechanism}
+            showTeeth={showTeeth}
+            inkColor={inkColor}
+          />
+        </section>
+
+        <aside className="grid content-start gap-3 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto lg:pr-2">
+          <Panel>
+            <div className="grid gap-3 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <MicroLabel>spirograph ratio terminal</MicroLabel>
+                  <h1 className="mt-1 text-3xl font-black uppercase leading-none tracking-[-0.08em] sm:text-4xl">Gear Pattern Lab</h1>
+                </div>
+                <div className="border border-zinc-950 bg-zinc-950 px-3 py-2 font-mono text-xs font-black text-white shadow-[4px_4px_0_#ff3b30]">
+                  {mode}
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-2 border-t border-zinc-300 pt-3 font-mono text-[11px] font-bold uppercase tracking-[0.12em]">
+                <div><span className="text-zinc-500">ratio</span><br />{ringTeeth}:{gearTeeth}</div>
+                <div><span className="text-zinc-500">reduced</span><br />{reduced}</div>
+                <div><span className="text-zinc-500">closure</span><br />{closure} turns</div>
+              </div>
+            </div>
+          </Panel>
+
+          <Panel>
+            <div className="grid gap-3 p-4">
+              <MicroLabel>fast presets</MicroLabel>
+              <div className="grid grid-cols-3 gap-2">
+                {PRESETS.map((preset) => (
+                  <button
+                    key={preset.label}
+                    onClick={() => applyPreset(preset)}
+                    className="border border-zinc-300 bg-white p-2 text-left transition hover:border-zinc-950 hover:bg-zinc-950 hover:text-white"
+                  >
+                    <div className="font-mono text-xs font-black">{preset.label}</div>
+                    <div className="mt-1 h-1.5 w-10" style={{ backgroundColor: preset.ink }} />
+                    <div className="mt-1 font-mono text-[9px] uppercase tracking-widest text-zinc-500">{preset.mode}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </Panel>
+
+          <Panel>
+            <div className="grid gap-3 p-4">
+              <MicroLabel>machine mode</MicroLabel>
+              <div className="grid grid-cols-2 gap-2">
+                <ToggleButton active={mode === "inside"} onClick={() => {
+                  setMode("inside");
+                  if (gearTeeth >= ringTeeth) setGearTeeth(Math.max(8, ringTeeth - 4));
+                }}>inside</ToggleButton>
+                <ToggleButton active={mode === "outside"} onClick={() => setMode("outside")}>outside</ToggleButton>
+                <ToggleButton active={showMechanism} onClick={() => setShowMechanism((v) => !v)}>overlay</ToggleButton>
+                <ToggleButton active={showTeeth} onClick={() => setShowTeeth((v) => !v)}>teeth</ToggleButton>
+              </div>
+
+              <RangeControl
+                label="ring teeth"
+                value={ringTeeth}
+                min={24}
+                max={180}
+                step={1}
+                onChange={(v) => {
+                  setRingTeeth(v);
+                  if (mode === "inside" && gearTeeth >= v) setGearTeeth(Math.max(8, v - 4));
+                }}
+              />
+              <RangeControl label="gear teeth" value={gearTeeth} min={8} max={maxGear} step={1} onChange={setGearTeeth} />
+              <RangeControl label="pen offset" value={Math.round(penOffset * 100)} min={0} max={100} step={1} suffix="%" onChange={(v) => setPenOffset(v / 100)} />
+              <RangeControl label="phase" value={Math.round((phase * 180) / Math.PI)} min={0} max={360} step={1} suffix="°" onChange={(v) => setPhase((v * Math.PI) / 180)} />
+              {!animate && <RangeControl label="draw progress" value={Math.round(progress * 100)} min={1} max={100} step={1} suffix="%" onChange={(v) => setProgress(v / 100)} />}
+            </div>
+          </Panel>
+
+          <Panel>
+            <div className="grid gap-3 p-4">
+              <MicroLabel>ink channel</MicroLabel>
+              <div className="grid grid-cols-6 gap-2">
+                {[ACCENT, HOT, "#111827", "#6d28d9", "#0f766e", "#be123c"].map((color) => (
+                  <button
+                    key={color}
+                    aria-label={`Set ink color ${color}`}
+                    onClick={() => setInkColor(color)}
+                    className={`h-9 border ${inkColor === color ? "border-zinc-950 ring-2 ring-zinc-950" : "border-zinc-300"}`}
+                    style={{ backgroundColor: color }}
+                  />
+                ))}
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <button onClick={() => setAnimate((v) => !v)} className="border border-zinc-950 bg-zinc-950 px-3 py-3 font-mono text-xs font-black uppercase tracking-widest text-white hover:bg-white hover:text-zinc-950">
+                  {animate ? "stop draw" : "animate"}
+                </button>
+                <button onClick={reset} className="border border-zinc-950 bg-white px-3 py-3 font-mono text-xs font-black uppercase tracking-widest text-zinc-950 hover:bg-zinc-950 hover:text-white">
+                  reset
+                </button>
+              </div>
+            </div>
+          </Panel>
+
+          <section className="border border-zinc-950 bg-zinc-950 text-white shadow-[8px_8px_0_#ff3b30]">
+            <div className="grid gap-3 p-4">
+              <MicroLabel>svg output</MicroLabel>
+              <div className="grid grid-cols-2 gap-2">
+                <button onClick={exportDrawingSvg} className="border border-white/30 bg-white px-3 py-3 font-mono text-xs font-black uppercase tracking-widest text-zinc-950 hover:bg-zinc-200">
+                  export drawing
+                </button>
+                <button onClick={exportMechanismSvg} className="border border-white/30 bg-zinc-900 px-3 py-3 font-mono text-xs font-black uppercase tracking-widest text-white hover:bg-zinc-800">
+                  export gear/ring
+                </button>
+              </div>
+              <p className="font-mono text-[10px] uppercase leading-5 tracking-[0.16em] text-zinc-400">
+                Gear/ring SVG is schematic tooth geometry for iteration and fabrication planning. Drawing SVG exports the current visible artboard.
+              </p>
+            </div>
+          </section>
+        </aside>
+      </div>
+    </main>
+  );
+}
