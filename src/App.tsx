@@ -498,7 +498,7 @@ export default function App() {
   const [phase, setPhase] = useState(0);
   const [progress, setProgress] = useState(1);
   const [animate, setAnimate] = useState(true);
-  const [animationSpeed, setAnimationSpeed] = useState(65);
+  const [animationSpeed, setAnimationSpeed] = useState(50);
   const [showMechanism, setShowMechanism] = useState(false);
   const [showTeeth, setShowTeeth] = useState(false);
   const [inkColor, setInkColor] = useState(HOT);
