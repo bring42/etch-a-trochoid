@@ -74,6 +74,10 @@ type SpiroArtboardProps = {
   inkColor: string;
 };
 
+const CURVE_SAMPLES = 3000;
+const MECHANISM_PHASE_OFFSET = -Math.PI / 2;
+const ANIMATION_BASE_DURATION_MS = 5200;
+
 const ACCENT = "#1d4ed8";
 const HOT = "#ff3b30";
 const PAPER = "#f7f5ef";
@@ -340,17 +344,19 @@ function SpiroArtboard({ ringTeeth, gearTeeth, penOffset, mode, phase, progress,
   const height = 720;
 
   const curve = useMemo(
-    () => buildCurve({ ringTeeth, gearTeeth, penOffset, mode, phase, width, height, samples: 3000 }),
+    () => buildCurve({ ringTeeth, gearTeeth, penOffset, mode, phase, width, height, samples: CURVE_SAMPLES }),
     [ringTeeth, gearTeeth, penOffset, mode, phase],
   );
 
-  const visibleCount = Math.max(2, Math.floor(curve.points.length * progress));
+  const visibleIndex = Math.max(1, Math.min(CURVE_SAMPLES, Math.round(progress * CURVE_SAMPLES)));
+  const visibleCount = visibleIndex + 1;
   const visiblePoints = curve.points.slice(0, visibleCount);
   const fullPath = pointsToPath(curve.points);
   const visiblePath = pointsToPath(visiblePoints);
   const penPoint = visiblePoints[visiblePoints.length - 1] ?? curve.points[0];
 
-  const t = curve.maxT * progress + phase;
+  const curveProgress = visibleIndex / CURVE_SAMPLES;
+  const t = curve.maxT * curveProgress + phase;
   const R = curve.R;
   const r = curve.r;
   const cx = curve.cx;
@@ -363,6 +369,7 @@ function SpiroArtboard({ ringTeeth, gearTeeth, penOffset, mode, phase, progress,
       : { x: (R + r) * Math.cos(t), y: (R + r) * Math.sin(t) };
 
   const gearSpin = mode === "inside" ? (-((R - r) / r) * t) : (-((R + r) / r) * t);
+  const mechanismAngle = gearSpin + MECHANISM_PHASE_OFFSET;
   const gearCenter = { x: cx + gearCenterRaw.x * scale, y: cy + gearCenterRaw.y * scale };
   const ringRadiusPx = R * scale;
   const gearRadiusPx = r * scale;
@@ -373,8 +380,8 @@ function SpiroArtboard({ ringTeeth, gearTeeth, penOffset, mode, phase, progress,
   };
 
   const ringPath = innerRingTeethPath(ringTeeth, cx, cy, ringRadiusPx, 0.045);
-  const gearOutline = gearPath(gearTeeth, gearCenter.x, gearCenter.y, gearRadiusPx, 0.08, 0.02, gearSpin - Math.PI / 2);
-  const holePoints = makePenHolePoints(gearCenter.x, gearCenter.y, gearRadiusPx, 10, gearSpin - Math.PI / 2);
+  const gearOutline = gearPath(gearTeeth, gearCenter.x, gearCenter.y, gearRadiusPx, 0.08, 0.02, mechanismAngle);
+  const holePoints = makePenHolePoints(gearCenter.x, gearCenter.y, gearRadiusPx, 10, mechanismAngle);
 
   return (
     <div className="relative h-full min-h-[360px] w-full overflow-hidden border border-zinc-950 bg-[#f7f5ef] shadow-[10px_10px_0_#09090b] md:min-h-0">
@@ -463,6 +470,7 @@ export default function App() {
   const [phase, setPhase] = useState(0);
   const [progress, setProgress] = useState(1);
   const [animate, setAnimate] = useState(false);
+  const [animationSpeed, setAnimationSpeed] = useState(100);
   const [showMechanism, setShowMechanism] = useState(false);
   const [showTeeth, setShowTeeth] = useState(true);
   const [inkColor, setInkColor] = useState(ACCENT);
@@ -473,19 +481,26 @@ export default function App() {
       return undefined;
     }
 
-    let frame = 0;
     let animationFrame = 0;
+    let startTime = 0;
 
-    const tick = () => {
-      frame += 1;
-      const loop = (frame % 260) / 260;
+    const speedMultiplier = Math.max(animationSpeed / 100, 0.1);
+    const duration = ANIMATION_BASE_DURATION_MS / speedMultiplier;
+
+    const tick = (timestamp: number) => {
+      if (startTime === 0) {
+        startTime = timestamp;
+      }
+
+      const elapsed = timestamp - startTime;
+      const loop = (elapsed % duration) / duration;
       setProgress(clamp(loop, 0.015, 1));
       animationFrame = requestAnimationFrame(tick);
     };
 
     animationFrame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(animationFrame);
-  }, [animate]);
+  }, [animate, animationSpeed]);
 
   const maxGear = mode === "inside" ? Math.max(8, ringTeeth - 4) : 120;
   const reduced = fraction(ringTeeth, gearTeeth);
@@ -530,6 +545,7 @@ export default function App() {
     setPhase(0);
     setProgress(1);
     setAnimate(false);
+    setAnimationSpeed(100);
     setShowMechanism(false);
     setShowTeeth(true);
     setInkColor(ACCENT);
@@ -671,6 +687,17 @@ export default function App() {
                   step={1}
                   suffix="%"
                   onChange={(value) => setProgress(value / 100)}
+                />
+              )}
+              {animate && (
+                <RangeControl
+                  label="animation speed"
+                  value={animationSpeed}
+                  min={25}
+                  max={300}
+                  step={5}
+                  suffix="%"
+                  onChange={setAnimationSpeed}
                 />
               )}
             </div>
