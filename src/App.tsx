@@ -340,10 +340,18 @@ function circlePath(cx: number, cy: number, radius: number): string {
   return `M ${(cx - radius).toFixed(2)} ${cy.toFixed(2)} A ${radius.toFixed(2)} ${radius.toFixed(2)} 0 1 0 ${(cx + radius).toFixed(2)} ${cy.toFixed(2)} A ${radius.toFixed(2)} ${radius.toFixed(2)} 0 1 0 ${(cx - radius).toFixed(2)} ${cy.toFixed(2)} Z`;
 }
 
-function makePenHolePoints(cx: number, cy: number, radius: number, count: number, phase = -Math.PI / 2): Point[] {
+function makePenHolePoints(
+  cx: number,
+  cy: number,
+  radius: number,
+  count: number,
+  phase = -Math.PI / 2,
+  innerFactor = 0.18,
+  outerFactor = 0.9,
+): Point[] {
   return Array.from({ length: count }, (_, index) => {
     const t = count === 1 ? 0 : index / (count - 1);
-    const ringRadius = radius * (0.18 + t * 0.72);
+    const ringRadius = radius * (innerFactor + t * (outerFactor - innerFactor));
     return polar(cx, cy, ringRadius, phase + t * 0.42);
   });
 }
@@ -356,7 +364,7 @@ function buildMechanismSvg({ ringTeeth, gearTeeth, mode, penOffset }: BuildMecha
   const moduleSize = (2 * ringPitchRadius) / ringTeeth;
   const gearPitchRadius = ringPitchRadius * (gearTeeth / ringTeeth);
   const centerDistance = mode === "inside" ? ringPitchRadius - gearPitchRadius : ringPitchRadius + gearPitchRadius;
-  const gearCx = cx + centerDistance;
+  const gearCx = mode === "inside" ? cx : cx + centerDistance;
   const gearCy = cy;
   const ringOuterPerimeterRadius = ringPitchRadius + moduleSize * EXPORT_RING_WALL_FACTOR;
   const ringHubRadius = Math.max(moduleSize * 3.2, 30);
@@ -385,7 +393,7 @@ function buildMechanismSvg({ ringTeeth, gearTeeth, mode, penOffset }: BuildMecha
     pitchRadius: gearPitchRadius,
     internal: false,
   });
-  const penHoles = makePenHolePoints(gearCx, gearCy, gearPitchRadius, 12);
+  const penHoles = makePenHolePoints(gearCx, gearCy, gearPitchRadius, 9, -Math.PI / 2, 0.16, 0.62);
   const selectedHole = polar(gearCx, gearCy, gearPitchRadius * penOffset, -Math.PI / 2 + 0.42);
   const ringHubPath = mode === "outside" ? circlePath(cx, cy, ringHubRadius) : null;
 
@@ -402,9 +410,9 @@ function buildMechanismSvg({ ringTeeth, gearTeeth, mode, penOffset }: BuildMecha
     <circle cx="${selectedHole.x.toFixed(2)}" cy="${selectedHole.y.toFixed(2)}" r="9" stroke="${HOT}"/>
   </g>
   <g font-family="monospace" font-size="18" fill="black">
-    <text x="42" y="54">SPIROGRAPH MECHANISM EXPORT</text>
-    <text x="42" y="82">RING ${ringTeeth} / GEAR ${gearTeeth} / ${mode.toUpperCase()} / PEN ${(penOffset * 100).toFixed(0)}%</text>
-    <text x="42" y="110">20 DEG PRESSURE / ${EXPORT_BACKLASH_FACTOR.toFixed(2)}M BACKLASH / KERF TUNE BEFORE CUTTING</text>
+    <text x="42" y="820">SPIROGRAPH MECHANISM EXPORT</text>
+    <text x="42" y="848">RING ${ringTeeth} / GEAR ${gearTeeth} / ${mode.toUpperCase()} / PEN ${(penOffset * 100).toFixed(0)}%</text>
+    <text x="42" y="876">20 DEG PRESSURE / ${EXPORT_BACKLASH_FACTOR.toFixed(2)}M BACKLASH / KERF TUNE BEFORE CUTTING</text>
   </g>
 </svg>`;
 }
