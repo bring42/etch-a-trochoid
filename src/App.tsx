@@ -409,7 +409,6 @@ function SpiroArtboard({ ringTeeth, gearTeeth, penOffset, mode, phase, progress,
       ? innerRingTeethPath(ringTeeth, cx, cy, ringRadiusPx, 0.045)
       : outerRingTeethPath(ringTeeth, cx, cy, ringRadiusPx, 0.045);
   const gearOutline = gearPath(gearTeeth, gearCenter.x, gearCenter.y, gearRadiusPx, 0.08, 0.02, mechanismAngle);
-  const holePoints = makePenHolePoints(gearCenter.x, gearCenter.y, gearRadiusPx, 10, mechanismAngle);
 
   return (
     <div className="relative h-full min-h-[360px] w-full overflow-hidden border border-zinc-950 bg-[#f7f5ef] shadow-[10px_10px_0_#09090b] md:min-h-0">
@@ -467,9 +466,6 @@ function SpiroArtboard({ ringTeeth, gearTeeth, penOffset, mode, phase, progress,
               <circle cx={gearCenter.x} cy={gearCenter.y} r={gearRadiusPx} fill="rgba(255,255,255,0.35)" stroke="#111827" strokeWidth="1.35" />
             )}
             <circle cx={gearCenter.x} cy={gearCenter.y} r={Math.max(3, gearRadiusPx * 0.08)} fill="none" stroke="#111827" strokeWidth="1" />
-            {holePoints.map((point, index) => (
-              <circle key={index} cx={point.x} cy={point.y} r={Math.max(2, gearRadiusPx * 0.018)} fill={index % 3 === 0 ? HOT : "#111827"} opacity="0.85" />
-            ))}
             <line x1={gearCenter.x} y1={gearCenter.y} x2={penPreview.x} y2={penPreview.y} stroke="#111827" strokeWidth="2" />
             <circle cx={penPreview.x} cy={penPreview.y} r="6" fill={HOT} stroke="#111827" strokeWidth="1" />
           </g>
