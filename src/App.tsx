@@ -393,7 +393,7 @@ function SpiroArtboard({ ringTeeth, gearTeeth, penOffset, mode, phase, progress,
       ? { x: (R - r) * Math.cos(t), y: (R - r) * Math.sin(t) }
       : { x: (R + r) * Math.cos(t), y: (R + r) * Math.sin(t) };
 
-  const gearSpin = mode === "inside" ? (-((R - r) / r) * t) : (-((R + r) / r) * t);
+  const gearSpin = mode === "inside" ? (-((R - r) / r) * t) : (((R + r) / r) * t);
   const mechanismAngle = gearSpin + MECHANISM_PHASE_OFFSET;
   const gearCenter = { x: cx + gearCenterRaw.x * scale, y: cy + gearCenterRaw.y * scale };
   const ringRadiusPx = R * scale;
