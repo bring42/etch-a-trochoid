@@ -214,6 +214,28 @@ function innerRingTeethPath(
   return `${points.map((point, index) => `${index === 0 ? "M" : "L"}${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(" ")} Z`;
 }
 
+function outerRingTeethPath(
+  teeth: number,
+  cx: number,
+  cy: number,
+  outerRadius: number,
+  toothDepth = 0.08,
+  startAngle = -Math.PI / 2,
+): string {
+  const steps = Math.max(8, teeth * 2);
+  const root = outerRadius * (1 - toothDepth * 0.45);
+  const tip = outerRadius * (1 + toothDepth);
+  const points: Point[] = [];
+
+  for (let index = 0; index < steps; index += 1) {
+    const angle = startAngle + (index / steps) * Math.PI * 2;
+    const radius = index % 2 === 0 ? root : tip;
+    points.push(polar(cx, cy, radius, angle));
+  }
+
+  return `${points.map((point, index) => `${index === 0 ? "M" : "L"}${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(" ")} Z`;
+}
+
 function circlePath(cx: number, cy: number, radius: number): string {
   return `M ${(cx - radius).toFixed(2)} ${cy.toFixed(2)} A ${radius.toFixed(2)} ${radius.toFixed(2)} 0 1 0 ${(cx + radius).toFixed(2)} ${cy.toFixed(2)} A ${radius.toFixed(2)} ${radius.toFixed(2)} 0 1 0 ${(cx - radius).toFixed(2)} ${cy.toFixed(2)} Z`;
 }
@@ -235,7 +257,10 @@ function buildMechanismSvg({ ringTeeth, gearTeeth, mode, penOffset }: BuildMecha
   const gearCx = mode === "inside" ? cx + ringRadius - gearRadius - 18 : cx + ringRadius + gearRadius + 36;
   const gearCy = cy;
   const outerRingRadius = ringRadius + 58;
-  const ringTeethSvgPath = innerRingTeethPath(ringTeeth, cx, cy, ringRadius, 0.055);
+  const ringTeethSvgPath =
+    mode === "inside"
+      ? innerRingTeethPath(ringTeeth, cx, cy, ringRadius, 0.055)
+      : outerRingTeethPath(ringTeeth, cx, cy, ringRadius, 0.055);
   const outer = circlePath(cx, cy, outerRingRadius);
   const gear = gearPath(gearTeeth, gearCx, gearCy, gearRadius, 0.11, 0.03);
   const penHoles = makePenHolePoints(gearCx, gearCy, gearRadius, 12);
@@ -379,7 +404,10 @@ function SpiroArtboard({ ringTeeth, gearTeeth, penOffset, mode, phase, progress,
     y: gearCenter.y + penRadiusPx * Math.sin(gearSpin),
   };
 
-  const ringPath = innerRingTeethPath(ringTeeth, cx, cy, ringRadiusPx, 0.045);
+  const ringPath =
+    mode === "inside"
+      ? innerRingTeethPath(ringTeeth, cx, cy, ringRadiusPx, 0.045)
+      : outerRingTeethPath(ringTeeth, cx, cy, ringRadiusPx, 0.045);
   const gearOutline = gearPath(gearTeeth, gearCenter.x, gearCenter.y, gearRadiusPx, 0.08, 0.02, mechanismAngle);
   const holePoints = makePenHolePoints(gearCenter.x, gearCenter.y, gearRadiusPx, 10, mechanismAngle);
 
