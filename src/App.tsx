@@ -98,10 +98,7 @@ const EXPORT_HEIGHT = 1000;
 const EXPORT_MARGIN = 60;
 const EXPORT_PART_GAP = 90;
 const EXPORT_TEXT_BLOCK_HEIGHT = 150;
-const EXPORT_PEN_HOLE_COUNT = 6;
-const EXPORT_PEN_HOLE_INNER_FACTOR = 0.34;
 const EXPORT_PEN_HOLE_OUTER_CAP = 0.52;
-const EXPORT_PEN_HOLE_SWEEP = 0.58;
 
 const ACCENT = "#1d4ed8";
 const HOT = "#ff3b30";
@@ -352,50 +349,22 @@ function circlePath(cx: number, cy: number, radius: number): string {
 function makePenHolePoints(
   cx: number,
   cy: number,
-  radius: number,
-  count: number,
+  startRadius: number,
+  maxRadius: number,
+  spacing: number,
   phase = -Math.PI / 2,
-  innerFactor = 0.18,
-  outerFactor = 0.9,
 ): Point[] {
-  if (count <= 1) {
-    return [polar(cx, cy, radius * innerFactor, phase)];
+  if (spacing <= 0 || startRadius > maxRadius) {
+    return [];
   }
 
-  const sampleCount = 160;
-  const samples: Array<{ point: Point; length: number }> = [];
-  let previousPoint = polar(cx, cy, radius * innerFactor, phase);
-  let totalLength = 0;
+  const points: Point[] = [];
 
-  samples.push({ point: previousPoint, length: 0 });
-
-  for (let index = 1; index <= sampleCount; index += 1) {
-    const t = index / sampleCount;
-    const ringRadius = radius * (innerFactor + t * (outerFactor - innerFactor));
-    const point = polar(cx, cy, ringRadius, phase + t * EXPORT_PEN_HOLE_SWEEP);
-    totalLength += Math.hypot(point.x - previousPoint.x, point.y - previousPoint.y);
-    samples.push({ point, length: totalLength });
-    previousPoint = point;
+  for (let holeRadius = startRadius; holeRadius <= maxRadius; holeRadius += spacing) {
+    points.push(polar(cx, cy, holeRadius, phase));
   }
 
-  return Array.from({ length: count }, (_, index) => {
-    const targetLength = (totalLength * index) / (count - 1);
-    const sampleIndex = samples.findIndex((sample) => sample.length >= targetLength);
-
-    if (sampleIndex <= 0) {
-      return samples[0].point;
-    }
-
-    const previousSample = samples[sampleIndex - 1];
-    const nextSample = samples[sampleIndex];
-    const segmentLength = nextSample.length - previousSample.length || 1;
-    const mix = (targetLength - previousSample.length) / segmentLength;
-
-    return {
-      x: previousSample.point.x + (nextSample.point.x - previousSample.point.x) * mix,
-      y: previousSample.point.y + (nextSample.point.y - previousSample.point.y) * mix,
-    };
-  });
+  return points;
 }
 
 function buildMechanismSvg({ ringTeeth, gearTeeth, mode, penOffset }: BuildMechanismInput): string {
@@ -421,8 +390,10 @@ function buildMechanismSvg({ ringTeeth, gearTeeth, mode, penOffset }: BuildMecha
   const gearHubRadius = Math.max(gearPitchRadius * 0.18, moduleSize * 1.8);
   const gearRootRadius = Math.max(moduleSize * 1.2, gearPitchRadius - moduleSize * 1.25);
   const exportHoleRadius = Math.max(4.2, moduleSize * 0.34);
-  const maxHoleRadius = Math.max(gearHubRadius + moduleSize * 0.85, gearRootRadius - exportHoleRadius - moduleSize * 0.4);
-  const safeHoleOuterFactor = clamp(maxHoleRadius / gearPitchRadius, 0.34, EXPORT_PEN_HOLE_OUTER_CAP);
+  const penHoleDiameter = exportHoleRadius * 2;
+  const penHoleSpacing = penHoleDiameter * 2;
+  const firstHoleRadius = gearHubRadius + penHoleSpacing;
+  const maxHoleRadius = Math.min(gearRootRadius - exportHoleRadius - moduleSize * 0.4, gearPitchRadius * EXPORT_PEN_HOLE_OUTER_CAP);
   const ringPath =
     mode === "inside"
       ? buildGearBoundaryPath({
@@ -447,25 +418,13 @@ function buildMechanismSvg({ ringTeeth, gearTeeth, mode, penOffset }: BuildMecha
     pitchRadius: gearPitchRadius,
     internal: false,
   });
-  const penHoles = makePenHolePoints(
-    gearCx,
-    gearCy,
-    gearPitchRadius,
-    EXPORT_PEN_HOLE_COUNT,
-    -Math.PI / 2,
-    EXPORT_PEN_HOLE_INNER_FACTOR,
-    safeHoleOuterFactor,
-  );
-  const targetPenRadius = clamp(
-    gearPitchRadius * penOffset,
-    gearPitchRadius * EXPORT_PEN_HOLE_INNER_FACTOR,
-    gearPitchRadius * safeHoleOuterFactor,
-  );
+  const penHoles = makePenHolePoints(gearCx, gearCy, firstHoleRadius, maxHoleRadius, penHoleSpacing, -Math.PI / 2);
+  const targetPenRadius = clamp(gearPitchRadius * penOffset, firstHoleRadius, maxHoleRadius);
   const selectedHole = penHoles.reduce((bestPoint, point) => {
     const bestDistance = Math.abs(Math.hypot(bestPoint.x - gearCx, bestPoint.y - gearCy) - targetPenRadius);
     const pointDistance = Math.abs(Math.hypot(point.x - gearCx, point.y - gearCy) - targetPenRadius);
     return pointDistance < bestDistance ? point : bestPoint;
-  }, penHoles[0]);
+  }, penHoles[0] ?? polar(gearCx, gearCy, firstHoleRadius, -Math.PI / 2));
   const ringHubPath = mode === "outside" ? circlePath(ringCx, ringCy, ringHubRadius) : null;
 
   return `<?xml version="1.0" encoding="UTF-8"?>
