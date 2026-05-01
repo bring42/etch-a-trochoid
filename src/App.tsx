@@ -393,7 +393,7 @@ function SpiroArtboard({ ringTeeth, gearTeeth, penOffset, mode, phase, progress,
       ? { x: (R - r) * Math.cos(t), y: (R - r) * Math.sin(t) }
       : { x: (R + r) * Math.cos(t), y: (R + r) * Math.sin(t) };
 
-  const gearSpin = mode === "inside" ? (-((R - r) / r) * t) : (((R + r) / r) * t);
+  const gearSpin = mode === "inside" ? (-((R - r) / r) * t) : (((R + r) / r) * t + Math.PI);
   const mechanismAngle = gearSpin + MECHANISM_PHASE_OFFSET;
   const gearCenter = { x: cx + gearCenterRaw.x * scale, y: cy + gearCenterRaw.y * scale };
   const ringRadiusPx = R * scale;
@@ -491,17 +491,17 @@ function SpiroArtboard({ ringTeeth, gearTeeth, penOffset, mode, phase, progress,
 }
 
 export default function App() {
-  const [mode, setMode] = useState<TrochoidMode>("inside");
-  const [ringTeeth, setRingTeeth] = useState(96);
-  const [gearTeeth, setGearTeeth] = useState(36);
-  const [penOffset, setPenOffset] = useState(0.72);
+  const [mode, setMode] = useState<TrochoidMode>("outside");
+  const [ringTeeth, setRingTeeth] = useState(84);
+  const [gearTeeth, setGearTeeth] = useState(35);
+  const [penOffset, setPenOffset] = useState(0.58);
   const [phase, setPhase] = useState(0);
   const [progress, setProgress] = useState(1);
-  const [animate, setAnimate] = useState(false);
-  const [animationSpeed, setAnimationSpeed] = useState(100);
+  const [animate, setAnimate] = useState(true);
+  const [animationSpeed, setAnimationSpeed] = useState(65);
   const [showMechanism, setShowMechanism] = useState(false);
-  const [showTeeth, setShowTeeth] = useState(true);
-  const [inkColor, setInkColor] = useState(ACCENT);
+  const [showTeeth, setShowTeeth] = useState(false);
+  const [inkColor, setInkColor] = useState(HOT);
 
   useEffect(() => {
     if (!animate) {
@@ -566,17 +566,17 @@ export default function App() {
   }
 
   function reset(): void {
-    setMode("inside");
-    setRingTeeth(96);
-    setGearTeeth(36);
-    setPenOffset(0.72);
+    setMode("outside");
+    setRingTeeth(84);
+    setGearTeeth(35);
+    setPenOffset(0.58);
     setPhase(0);
     setProgress(1);
-    setAnimate(false);
-    setAnimationSpeed(100);
+    setAnimate(true);
+    setAnimationSpeed(65);
     setShowMechanism(false);
-    setShowTeeth(true);
-    setInkColor(ACCENT);
+    setShowTeeth(false);
+    setInkColor(HOT);
   }
 
   return (
