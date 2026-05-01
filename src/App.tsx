@@ -358,10 +358,43 @@ function makePenHolePoints(
   innerFactor = 0.18,
   outerFactor = 0.9,
 ): Point[] {
-  return Array.from({ length: count }, (_, index) => {
-    const t = count === 1 ? 0 : index / (count - 1);
+  if (count <= 1) {
+    return [polar(cx, cy, radius * innerFactor, phase)];
+  }
+
+  const sampleCount = 160;
+  const samples: Array<{ point: Point; length: number }> = [];
+  let previousPoint = polar(cx, cy, radius * innerFactor, phase);
+  let totalLength = 0;
+
+  samples.push({ point: previousPoint, length: 0 });
+
+  for (let index = 1; index <= sampleCount; index += 1) {
+    const t = index / sampleCount;
     const ringRadius = radius * (innerFactor + t * (outerFactor - innerFactor));
-    return polar(cx, cy, ringRadius, phase + t * EXPORT_PEN_HOLE_SWEEP);
+    const point = polar(cx, cy, ringRadius, phase + t * EXPORT_PEN_HOLE_SWEEP);
+    totalLength += Math.hypot(point.x - previousPoint.x, point.y - previousPoint.y);
+    samples.push({ point, length: totalLength });
+    previousPoint = point;
+  }
+
+  return Array.from({ length: count }, (_, index) => {
+    const targetLength = (totalLength * index) / (count - 1);
+    const sampleIndex = samples.findIndex((sample) => sample.length >= targetLength);
+
+    if (sampleIndex <= 0) {
+      return samples[0].point;
+    }
+
+    const previousSample = samples[sampleIndex - 1];
+    const nextSample = samples[sampleIndex];
+    const segmentLength = nextSample.length - previousSample.length || 1;
+    const mix = (targetLength - previousSample.length) / segmentLength;
+
+    return {
+      x: previousSample.point.x + (nextSample.point.x - previousSample.point.x) * mix,
+      y: previousSample.point.y + (nextSample.point.y - previousSample.point.y) * mix,
+    };
   });
 }
 
