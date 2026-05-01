@@ -93,6 +93,11 @@ const ANIMATION_BASE_DURATION_MS = 5200;
 const EXPORT_PRESSURE_ANGLE_DEG = 20;
 const EXPORT_BACKLASH_FACTOR = 0.18;
 const EXPORT_RING_WALL_FACTOR = 5.5;
+const EXPORT_WIDTH = 1500;
+const EXPORT_HEIGHT = 1000;
+const EXPORT_MARGIN = 60;
+const EXPORT_PART_GAP = 90;
+const EXPORT_TEXT_BLOCK_HEIGHT = 150;
 
 const ACCENT = "#1d4ed8";
 const HOT = "#ff3b30";
@@ -357,35 +362,47 @@ function makePenHolePoints(
 }
 
 function buildMechanismSvg({ ringTeeth, gearTeeth, mode, penOffset }: BuildMechanismInput): string {
-  const size = 900;
-  const cx = size / 2;
-  const cy = size / 2;
-  const ringPitchRadius = 310;
+  const width = EXPORT_WIDTH;
+  const height = EXPORT_HEIGHT;
+  const gearRatio = gearTeeth / ringTeeth;
+  const moduleFactor = 2 / ringTeeth;
+  const ringExtentFactor = mode === "inside" ? 1 + moduleFactor * EXPORT_RING_WALL_FACTOR : 1 + moduleFactor;
+  const gearExtentFactor = gearRatio + moduleFactor;
+  const maxPitchFromWidth = (width - 2 * EXPORT_MARGIN - EXPORT_PART_GAP) / (2 * (ringExtentFactor + gearExtentFactor));
+  const maxPitchFromHeight = (height - EXPORT_TEXT_BLOCK_HEIGHT - 2 * EXPORT_MARGIN) / (2 * Math.max(ringExtentFactor, gearExtentFactor));
+  const ringPitchRadius = Math.min(310, maxPitchFromWidth, maxPitchFromHeight);
   const moduleSize = (2 * ringPitchRadius) / ringTeeth;
   const gearPitchRadius = ringPitchRadius * (gearTeeth / ringTeeth);
-  const centerDistance = mode === "inside" ? ringPitchRadius - gearPitchRadius : ringPitchRadius + gearPitchRadius;
-  const gearCx = mode === "inside" ? cx : cx + centerDistance;
-  const gearCy = cy;
+  const ringOuterExtent = ringPitchRadius * ringExtentFactor;
+  const gearOuterExtent = ringPitchRadius * gearExtentFactor;
+  const ringCx = EXPORT_MARGIN + ringOuterExtent;
+  const gearCx = width - EXPORT_MARGIN - gearOuterExtent;
+  const gearCy = EXPORT_MARGIN + Math.max(ringOuterExtent, gearOuterExtent);
+  const ringCy = gearCy;
   const ringOuterPerimeterRadius = ringPitchRadius + moduleSize * EXPORT_RING_WALL_FACTOR;
   const ringHubRadius = Math.max(moduleSize * 3.2, 30);
   const gearHubRadius = Math.max(gearPitchRadius * 0.18, moduleSize * 1.8);
+  const gearRootRadius = Math.max(moduleSize * 1.2, gearPitchRadius - moduleSize * 1.25);
+  const exportHoleRadius = Math.max(4.2, moduleSize * 0.34);
+  const maxHoleRadius = Math.max(gearHubRadius + moduleSize * 0.85, gearRootRadius - exportHoleRadius - moduleSize * 0.4);
+  const safeHoleOuterFactor = clamp(maxHoleRadius / gearPitchRadius, 0.34, 0.82);
   const ringPath =
     mode === "inside"
       ? buildGearBoundaryPath({
           teeth: ringTeeth,
-          cx,
-          cy,
+          cx: ringCx,
+          cy: ringCy,
           pitchRadius: ringPitchRadius,
           internal: true,
         })
       : buildGearBoundaryPath({
           teeth: ringTeeth,
-          cx,
-          cy,
+          cx: ringCx,
+          cy: ringCy,
           pitchRadius: ringPitchRadius,
           internal: false,
         });
-  const ringBodyPath = mode === "inside" ? circlePath(cx, cy, ringOuterPerimeterRadius) : null;
+  const ringBodyPath = mode === "inside" ? circlePath(ringCx, ringCy, ringOuterPerimeterRadius) : null;
   const gearPathForExport = buildGearBoundaryPath({
     teeth: gearTeeth,
     cx: gearCx,
@@ -393,26 +410,31 @@ function buildMechanismSvg({ ringTeeth, gearTeeth, mode, penOffset }: BuildMecha
     pitchRadius: gearPitchRadius,
     internal: false,
   });
-  const penHoles = makePenHolePoints(gearCx, gearCy, gearPitchRadius, 9, -Math.PI / 2, 0.16, 0.62);
-  const selectedHole = polar(gearCx, gearCy, gearPitchRadius * penOffset, -Math.PI / 2 + 0.42);
-  const ringHubPath = mode === "outside" ? circlePath(cx, cy, ringHubRadius) : null;
+  const penHoles = makePenHolePoints(gearCx, gearCy, gearPitchRadius, 11, -Math.PI / 2, 0.18, safeHoleOuterFactor);
+  const targetPenRadius = clamp(gearPitchRadius * penOffset, gearPitchRadius * 0.18, gearPitchRadius * safeHoleOuterFactor);
+  const selectedHole = penHoles.reduce((bestPoint, point) => {
+    const bestDistance = Math.abs(Math.hypot(bestPoint.x - gearCx, bestPoint.y - gearCy) - targetPenRadius);
+    const pointDistance = Math.abs(Math.hypot(point.x - gearCx, point.y - gearCy) - targetPenRadius);
+    return pointDistance < bestDistance ? point : bestPoint;
+  }, penHoles[0]);
+  const ringHubPath = mode === "outside" ? circlePath(ringCx, ringCy, ringHubRadius) : null;
 
   return `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}">
-  <rect width="${size}" height="${size}" fill="white"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}">
+  <rect width="${width}" height="${height}" fill="white"/>
   <g fill="none" stroke="black" stroke-width="2" vector-effect="non-scaling-stroke">
     ${ringBodyPath ? `<path d="${ringBodyPath}"/>` : ""}
     <path d="${ringPath}"/>
     ${ringHubPath ? `<path d="${ringHubPath}"/>` : ""}
     <path d="${gearPathForExport}"/>
     <circle cx="${gearCx.toFixed(2)}" cy="${gearCy.toFixed(2)}" r="${gearHubRadius.toFixed(2)}"/>
-    ${penHoles.map((point) => `<circle cx="${point.x.toFixed(2)}" cy="${point.y.toFixed(2)}" r="5"/>`).join("\n    ")}
+    ${penHoles.map((point) => `<circle cx="${point.x.toFixed(2)}" cy="${point.y.toFixed(2)}" r="${exportHoleRadius.toFixed(2)}"/>`).join("\n    ")}
     <circle cx="${selectedHole.x.toFixed(2)}" cy="${selectedHole.y.toFixed(2)}" r="9" stroke="${HOT}"/>
   </g>
   <g font-family="monospace" font-size="18" fill="black">
-    <text x="42" y="820">SPIROGRAPH MECHANISM EXPORT</text>
-    <text x="42" y="848">RING ${ringTeeth} / GEAR ${gearTeeth} / ${mode.toUpperCase()} / PEN ${(penOffset * 100).toFixed(0)}%</text>
-    <text x="42" y="876">20 DEG PRESSURE / ${EXPORT_BACKLASH_FACTOR.toFixed(2)}M BACKLASH / KERF TUNE BEFORE CUTTING</text>
+    <text x="42" y="878">SPIROGRAPH MECHANISM EXPORT</text>
+    <text x="42" y="906">RING ${ringTeeth} / GEAR ${gearTeeth} / ${mode.toUpperCase()} / PEN ${(penOffset * 100).toFixed(0)}%</text>
+    <text x="42" y="934">20 DEG PRESSURE / ${EXPORT_BACKLASH_FACTOR.toFixed(2)}M BACKLASH / KERF TUNE BEFORE CUTTING</text>
   </g>
 </svg>`;
 }
