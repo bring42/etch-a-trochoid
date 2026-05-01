@@ -98,7 +98,7 @@ const EXPORT_HEIGHT = 1000;
 const EXPORT_MARGIN = 60;
 const EXPORT_PART_GAP = 90;
 const EXPORT_TEXT_BLOCK_HEIGHT = 150;
-const EXPORT_PEN_HOLE_COUNT = 7;
+const EXPORT_PEN_HOLE_COUNT = 6;
 const EXPORT_PEN_HOLE_INNER_FACTOR = 0.22;
 const EXPORT_PEN_HOLE_OUTER_CAP = 0.52;
 
@@ -360,7 +360,7 @@ function makePenHolePoints(
   return Array.from({ length: count }, (_, index) => {
     const t = count === 1 ? 0 : index / (count - 1);
     const ringRadius = radius * (innerFactor + t * (outerFactor - innerFactor));
-    return polar(cx, cy, ringRadius, phase + t * 0.42);
+    return polar(cx, cy, ringRadius, phase);
   });
 }
 
