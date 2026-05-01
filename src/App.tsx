@@ -98,6 +98,9 @@ const EXPORT_HEIGHT = 1000;
 const EXPORT_MARGIN = 60;
 const EXPORT_PART_GAP = 90;
 const EXPORT_TEXT_BLOCK_HEIGHT = 150;
+const EXPORT_PEN_HOLE_COUNT = 7;
+const EXPORT_PEN_HOLE_INNER_FACTOR = 0.22;
+const EXPORT_PEN_HOLE_OUTER_CAP = 0.52;
 
 const ACCENT = "#1d4ed8";
 const HOT = "#ff3b30";
@@ -385,7 +388,7 @@ function buildMechanismSvg({ ringTeeth, gearTeeth, mode, penOffset }: BuildMecha
   const gearRootRadius = Math.max(moduleSize * 1.2, gearPitchRadius - moduleSize * 1.25);
   const exportHoleRadius = Math.max(4.2, moduleSize * 0.34);
   const maxHoleRadius = Math.max(gearHubRadius + moduleSize * 0.85, gearRootRadius - exportHoleRadius - moduleSize * 0.4);
-  const safeHoleOuterFactor = clamp(maxHoleRadius / gearPitchRadius, 0.34, 0.82);
+  const safeHoleOuterFactor = clamp(maxHoleRadius / gearPitchRadius, 0.34, EXPORT_PEN_HOLE_OUTER_CAP);
   const ringPath =
     mode === "inside"
       ? buildGearBoundaryPath({
@@ -410,8 +413,20 @@ function buildMechanismSvg({ ringTeeth, gearTeeth, mode, penOffset }: BuildMecha
     pitchRadius: gearPitchRadius,
     internal: false,
   });
-  const penHoles = makePenHolePoints(gearCx, gearCy, gearPitchRadius, 11, -Math.PI / 2, 0.18, safeHoleOuterFactor);
-  const targetPenRadius = clamp(gearPitchRadius * penOffset, gearPitchRadius * 0.18, gearPitchRadius * safeHoleOuterFactor);
+  const penHoles = makePenHolePoints(
+    gearCx,
+    gearCy,
+    gearPitchRadius,
+    EXPORT_PEN_HOLE_COUNT,
+    -Math.PI / 2,
+    EXPORT_PEN_HOLE_INNER_FACTOR,
+    safeHoleOuterFactor,
+  );
+  const targetPenRadius = clamp(
+    gearPitchRadius * penOffset,
+    gearPitchRadius * EXPORT_PEN_HOLE_INNER_FACTOR,
+    gearPitchRadius * safeHoleOuterFactor,
+  );
   const selectedHole = penHoles.reduce((bestPoint, point) => {
     const bestDistance = Math.abs(Math.hypot(bestPoint.x - gearCx, bestPoint.y - gearCy) - targetPenRadius);
     const pointDistance = Math.abs(Math.hypot(point.x - gearCx, point.y - gearCy) - targetPenRadius);
