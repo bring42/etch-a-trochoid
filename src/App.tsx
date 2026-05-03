@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { buildFabricationSvg, buildProductionDrawingSvg, evaluateMechanismSetup } from "./spirographGeometry";
 
 type TrochoidMode = "inside" | "outside";
 
@@ -465,6 +466,8 @@ function runTests(): void {
   console.assert(curve.points.length === 301, "curve point count includes end point");
   console.assert(gearPath(20, 100, 100, 50).startsWith("M"), "gear path is valid SVG path data");
   console.assert(buildGearBoundaryPath({ teeth: 24, cx: 0, cy: 0, pitchRadius: 120 }).startsWith("M"), "working gear boundary path is valid SVG path data");
+  console.assert(evaluateMechanismSetup({ ringTeeth: 96, gearTeeth: 36, mode: "inside", penOffset: 0.5 }).status === "viable", "approved inside ratio validates");
+  console.assert(buildProductionDrawingSvg({ ringTeeth: 72, gearTeeth: 24, mode: "outside", penOffset: 0.48, inkColor: HOT }).includes("<svg"), "production drawing export is valid SVG");
 }
 
 if (typeof console !== "undefined") {
@@ -693,6 +696,10 @@ export default function App() {
   const maxGear = mode === "inside" ? Math.max(8, ringTeeth - 4) : 120;
   const reduced = fraction(ringTeeth, gearTeeth);
   const closure = gearTeeth / gcd(ringTeeth, gearTeeth);
+  const evaluation = useMemo(
+    () => evaluateMechanismSetup({ ringTeeth, gearTeeth, mode, penOffset }),
+    [ringTeeth, gearTeeth, mode, penOffset],
+  );
 
   function applyPreset(preset: Preset): void {
     setRingTeeth(preset.ring);
@@ -704,24 +711,12 @@ export default function App() {
   }
 
   function exportDrawingSvg(): void {
-    const svg = document.getElementById("spiro-artboard");
-
-    if (!(svg instanceof SVGSVGElement)) {
-      return;
-    }
-
-    const clone = svg.cloneNode(true);
-
-    if (!(clone instanceof SVGSVGElement)) {
-      return;
-    }
-
-    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-    downloadText(`spirograph-drawing-${ringTeeth}-${gearTeeth}.svg`, clone.outerHTML);
+    const svg = buildProductionDrawingSvg({ ringTeeth, gearTeeth, mode, penOffset, inkColor });
+    downloadText(`spirograph-drawing-${ringTeeth}-${gearTeeth}.svg`, svg);
   }
 
   function exportMechanismSvg(): void {
-    const svg = buildMechanismSvg({ ringTeeth, gearTeeth, mode, penOffset });
+    const svg = buildFabricationSvg({ ringTeeth, gearTeeth, mode, penOffset });
     downloadText(`spirograph-ring-gear-${ringTeeth}-${gearTeeth}.svg`, svg);
   }
 
@@ -764,8 +759,18 @@ export default function App() {
                   <MicroLabel>spirograph ratio terminal</MicroLabel>
                   <h1 className="mt-1 text-3xl font-black uppercase leading-none tracking-[-0.08em] sm:text-4xl">Gear Pattern Lab</h1>
                 </div>
-                <div className="border border-zinc-950 bg-zinc-950 px-3 py-2 font-mono text-xs font-black text-white shadow-[4px_4px_0_#ff3b30]">
-                  {mode}
+                <div className="grid gap-2">
+                  <div className="border border-zinc-950 bg-zinc-950 px-3 py-2 font-mono text-xs font-black text-white shadow-[4px_4px_0_#ff3b30]">
+                    {mode}
+                  </div>
+                  <div
+                    className={`border px-3 py-2 font-mono text-[10px] font-black uppercase tracking-[0.14em] ${
+                      evaluation.status === "viable" ? "border-emerald-700 bg-emerald-50 text-emerald-800" : "border-amber-700 bg-amber-50 text-amber-800"
+                    }`}
+                    title={evaluation.detail}
+                  >
+                    {evaluation.label}
+                  </div>
                 </div>
               </div>
               <div className="grid grid-cols-3 gap-2 border-t border-zinc-300 pt-3 font-mono text-[11px] font-bold uppercase tracking-[0.12em]">
@@ -785,6 +790,10 @@ export default function App() {
                   {closure} turns
                 </div>
               </div>
+              <div className="border-t border-zinc-200 pt-3 font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-zinc-500">
+                mesh status <span className="text-zinc-950">{evaluation.status === "viable" ? "ok" : "risk"}</span>
+              </div>
+              <p className="border-t border-zinc-200 pt-3 font-mono text-[10px] uppercase leading-5 tracking-[0.14em] text-zinc-500">{evaluation.detail}</p>
             </div>
           </Panel>
 
@@ -945,7 +954,7 @@ export default function App() {
                 </button>
               </div>
               <p className="font-mono text-[10px] uppercase leading-5 tracking-[0.16em] text-zinc-400">
-                Gear/ring SVG is schematic tooth geometry for iteration and fabrication planning. Drawing SVG exports the current visible artboard.
+                Drawing SVG now exports an actual-scale traced path. Gear/ring SVG exports a fabrication sheet using the same gear geometry and mesh plausibility check.
               </p>
             </div>
           </section>
