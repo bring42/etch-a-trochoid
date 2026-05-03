@@ -40,26 +40,6 @@ type CurveResult = {
   cy: number;
 };
 
-type BuildMechanismInput = {
-  ringTeeth: number;
-  gearTeeth: number;
-  mode: TrochoidMode;
-  penOffset: number;
-};
-
-type GearBoundaryInput = {
-  teeth: number;
-  cx: number;
-  cy: number;
-  pitchRadius: number;
-  startAngle?: number;
-  internal?: boolean;
-  pressureAngleDeg?: number;
-  backlashFactor?: number;
-  addendumFactor?: number;
-  dedendumFactor?: number;
-};
-
 type RangeControlProps = {
   label: string;
   value: number;
@@ -91,15 +71,6 @@ type SpiroArtboardProps = {
 const CURVE_SAMPLES = 3000;
 const MECHANISM_PHASE_OFFSET = -Math.PI / 2;
 const ANIMATION_BASE_DURATION_MS = 5200;
-const EXPORT_PRESSURE_ANGLE_DEG = 20;
-const EXPORT_BACKLASH_FACTOR = 0.18;
-const EXPORT_RING_WALL_FACTOR = 5.5;
-const EXPORT_WIDTH = 1500;
-const EXPORT_HEIGHT = 1000;
-const EXPORT_MARGIN = 60;
-const EXPORT_PART_GAP = 90;
-const EXPORT_TEXT_BLOCK_HEIGHT = 150;
-const EXPORT_PEN_HOLE_OUTER_CAP = 0.52;
 
 const ACCENT = "#1d4ed8";
 const HOT = "#ff3b30";
@@ -259,195 +230,6 @@ function outerRingTeethPath(
   return `${points.map((point, index) => `${index === 0 ? "M" : "L"}${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(" ")} Z`;
 }
 
-function pointsToClosedPath(points: Point[]): string {
-  if (!points.length) {
-    return "";
-  }
-
-  return `${pointsToPath(points)} Z`;
-}
-
-function appendArcPoints(points: Point[], cx: number, cy: number, radius: number, startAngle: number, endAngle: number): void {
-  const sweep = endAngle - startAngle;
-  const steps = Math.max(2, Math.ceil(Math.abs(sweep) / (Math.PI / 24)));
-
-  for (let step = 1; step <= steps; step += 1) {
-    const angle = startAngle + (sweep * step) / steps;
-    points.push(polar(cx, cy, radius, angle));
-  }
-}
-
-function buildGearBoundaryPath({
-  teeth,
-  cx,
-  cy,
-  pitchRadius,
-  startAngle = -Math.PI / 2,
-  internal = false,
-  pressureAngleDeg = EXPORT_PRESSURE_ANGLE_DEG,
-  backlashFactor = EXPORT_BACKLASH_FACTOR,
-  addendumFactor = 1,
-  dedendumFactor = 1.25,
-}: GearBoundaryInput): string {
-  const moduleSize = (2 * pitchRadius) / teeth;
-  const pressureAngle = (pressureAngleDeg * Math.PI) / 180;
-  const toothAngle = (Math.PI * 2) / teeth;
-  const backlash = moduleSize * backlashFactor;
-  const addendum = moduleSize * addendumFactor;
-  const dedendum = moduleSize * dedendumFactor;
-  const tipRadius = internal ? pitchRadius - addendum : pitchRadius + addendum;
-  const rootRadius = internal ? pitchRadius + dedendum : Math.max(moduleSize * 1.2, pitchRadius - dedendum);
-  const pitchHalfThickness = Math.max((toothAngle * pitchRadius) / 4 - backlash / 2, moduleSize * 0.45);
-
-  function halfAngleAtRadius(radius: number): number {
-    const radialDelta = radius - pitchRadius;
-    const adjustedHalfThickness = internal
-      ? pitchHalfThickness + radialDelta * Math.tan(pressureAngle)
-      : pitchHalfThickness - radialDelta * Math.tan(pressureAngle);
-    const limitedHalfThickness = clamp(adjustedHalfThickness, moduleSize * 0.32, toothAngle * pitchRadius * 0.45);
-    return limitedHalfThickness / Math.max(radius, 1);
-  }
-
-  const tipHalfAngle = halfAngleAtRadius(tipRadius);
-  const pitchHalfAngle = halfAngleAtRadius(pitchRadius);
-  const rootHalfAngle = halfAngleAtRadius(rootRadius);
-  const points: Point[] = [];
-  let firstRootLeftAngle = 0;
-  let previousRootRightAngle = 0;
-
-  for (let tooth = 0; tooth < teeth; tooth += 1) {
-    const centerAngle = startAngle + tooth * toothAngle;
-    const rootLeftAngle = centerAngle - rootHalfAngle;
-    const pitchLeftAngle = centerAngle - pitchHalfAngle;
-    const tipLeftAngle = centerAngle - tipHalfAngle;
-    const tipRightAngle = centerAngle + tipHalfAngle;
-    const pitchRightAngle = centerAngle + pitchHalfAngle;
-    const rootRightAngle = centerAngle + rootHalfAngle;
-
-    if (tooth === 0) {
-      firstRootLeftAngle = rootLeftAngle;
-      points.push(polar(cx, cy, rootRadius, rootLeftAngle));
-    } else {
-      appendArcPoints(points, cx, cy, rootRadius, previousRootRightAngle, rootLeftAngle);
-    }
-
-    points.push(polar(cx, cy, pitchRadius, pitchLeftAngle));
-    points.push(polar(cx, cy, tipRadius, tipLeftAngle));
-    appendArcPoints(points, cx, cy, tipRadius, tipLeftAngle, tipRightAngle);
-    points.push(polar(cx, cy, pitchRadius, pitchRightAngle));
-    points.push(polar(cx, cy, rootRadius, rootRightAngle));
-    previousRootRightAngle = rootRightAngle;
-  }
-
-  appendArcPoints(points, cx, cy, rootRadius, previousRootRightAngle, firstRootLeftAngle + Math.PI * 2);
-  return pointsToClosedPath(points);
-}
-
-function circlePath(cx: number, cy: number, radius: number): string {
-  return `M ${(cx - radius).toFixed(2)} ${cy.toFixed(2)} A ${radius.toFixed(2)} ${radius.toFixed(2)} 0 1 0 ${(cx + radius).toFixed(2)} ${cy.toFixed(2)} A ${radius.toFixed(2)} ${radius.toFixed(2)} 0 1 0 ${(cx - radius).toFixed(2)} ${cy.toFixed(2)} Z`;
-}
-
-function makePenHolePoints(
-  cx: number,
-  cy: number,
-  startRadius: number,
-  maxRadius: number,
-  spacing: number,
-  phase = -Math.PI / 2,
-): Point[] {
-  if (spacing <= 0 || startRadius > maxRadius) {
-    return [];
-  }
-
-  const points: Point[] = [];
-
-  for (let holeRadius = startRadius; holeRadius <= maxRadius; holeRadius += spacing) {
-    points.push(polar(cx, cy, holeRadius, phase));
-  }
-
-  return points;
-}
-
-function buildMechanismSvg({ ringTeeth, gearTeeth, mode, penOffset }: BuildMechanismInput): string {
-  const width = EXPORT_WIDTH;
-  const height = EXPORT_HEIGHT;
-  const gearRatio = gearTeeth / ringTeeth;
-  const moduleFactor = 2 / ringTeeth;
-  const ringExtentFactor = mode === "inside" ? 1 + moduleFactor * EXPORT_RING_WALL_FACTOR : 1 + moduleFactor;
-  const gearExtentFactor = gearRatio + moduleFactor;
-  const maxPitchFromWidth = (width - 2 * EXPORT_MARGIN - EXPORT_PART_GAP) / (2 * (ringExtentFactor + gearExtentFactor));
-  const maxPitchFromHeight = (height - EXPORT_TEXT_BLOCK_HEIGHT - 2 * EXPORT_MARGIN) / (2 * Math.max(ringExtentFactor, gearExtentFactor));
-  const ringPitchRadius = Math.min(310, maxPitchFromWidth, maxPitchFromHeight);
-  const moduleSize = (2 * ringPitchRadius) / ringTeeth;
-  const gearPitchRadius = ringPitchRadius * (gearTeeth / ringTeeth);
-  const ringOuterExtent = ringPitchRadius * ringExtentFactor;
-  const gearOuterExtent = ringPitchRadius * gearExtentFactor;
-  const ringCx = EXPORT_MARGIN + ringOuterExtent;
-  const gearCx = width - EXPORT_MARGIN - gearOuterExtent;
-  const gearCy = EXPORT_MARGIN + Math.max(ringOuterExtent, gearOuterExtent);
-  const ringCy = gearCy;
-  const ringOuterPerimeterRadius = ringPitchRadius + moduleSize * EXPORT_RING_WALL_FACTOR;
-  const ringHubRadius = Math.max(moduleSize * 3.2, 30);
-  const gearHubRadius = Math.max(gearPitchRadius * 0.18, moduleSize * 1.8);
-  const gearRootRadius = Math.max(moduleSize * 1.2, gearPitchRadius - moduleSize * 1.25);
-  const exportHoleRadius = Math.max(4.2, moduleSize * 0.34);
-  const penHoleDiameter = exportHoleRadius * 2;
-  const penHoleSpacing = penHoleDiameter * 2;
-  const firstHoleRadius = gearHubRadius + penHoleSpacing;
-  const maxHoleRadius = Math.min(gearRootRadius - exportHoleRadius - moduleSize * 0.4, gearPitchRadius * EXPORT_PEN_HOLE_OUTER_CAP);
-  const ringPath =
-    mode === "inside"
-      ? buildGearBoundaryPath({
-          teeth: ringTeeth,
-          cx: ringCx,
-          cy: ringCy,
-          pitchRadius: ringPitchRadius,
-          internal: true,
-        })
-      : buildGearBoundaryPath({
-          teeth: ringTeeth,
-          cx: ringCx,
-          cy: ringCy,
-          pitchRadius: ringPitchRadius,
-          internal: false,
-        });
-  const ringBodyPath = mode === "inside" ? circlePath(ringCx, ringCy, ringOuterPerimeterRadius) : null;
-  const gearPathForExport = buildGearBoundaryPath({
-    teeth: gearTeeth,
-    cx: gearCx,
-    cy: gearCy,
-    pitchRadius: gearPitchRadius,
-    internal: false,
-  });
-  const penHoles = makePenHolePoints(gearCx, gearCy, firstHoleRadius, maxHoleRadius, penHoleSpacing, -Math.PI / 2);
-  const targetPenRadius = clamp(gearPitchRadius * penOffset, firstHoleRadius, maxHoleRadius);
-  const selectedHole = penHoles.reduce((bestPoint, point) => {
-    const bestDistance = Math.abs(Math.hypot(bestPoint.x - gearCx, bestPoint.y - gearCy) - targetPenRadius);
-    const pointDistance = Math.abs(Math.hypot(point.x - gearCx, point.y - gearCy) - targetPenRadius);
-    return pointDistance < bestDistance ? point : bestPoint;
-  }, penHoles[0] ?? polar(gearCx, gearCy, firstHoleRadius, -Math.PI / 2));
-  const ringHubPath = mode === "outside" ? circlePath(ringCx, ringCy, ringHubRadius) : null;
-
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}">
-  <rect width="${width}" height="${height}" fill="white"/>
-  <g fill="none" stroke="black" stroke-width="2" vector-effect="non-scaling-stroke">
-    ${ringBodyPath ? `<path d="${ringBodyPath}"/>` : ""}
-    <path d="${ringPath}"/>
-    ${ringHubPath ? `<path d="${ringHubPath}"/>` : ""}
-    <path d="${gearPathForExport}"/>
-    <circle cx="${gearCx.toFixed(2)}" cy="${gearCy.toFixed(2)}" r="${gearHubRadius.toFixed(2)}"/>
-    ${penHoles.map((point) => `<circle cx="${point.x.toFixed(2)}" cy="${point.y.toFixed(2)}" r="${exportHoleRadius.toFixed(2)}"/>`).join("\n    ")}
-    <circle cx="${selectedHole.x.toFixed(2)}" cy="${selectedHole.y.toFixed(2)}" r="9" stroke="${HOT}"/>
-  </g>
-  <g font-family="monospace" font-size="18" fill="black">
-    <text x="42" y="878">SPIROGRAPH MECHANISM EXPORT</text>
-    <text x="42" y="906">RING ${ringTeeth} / GEAR ${gearTeeth} / ${mode.toUpperCase()} / PEN ${(penOffset * 100).toFixed(0)}%</text>
-    <text x="42" y="934">20 DEG PRESSURE / ${EXPORT_BACKLASH_FACTOR.toFixed(2)}M BACKLASH / KERF TUNE BEFORE CUTTING</text>
-  </g>
-</svg>`;
-}
-
 function runTests(): void {
   console.assert(gcd(96, 36) === 12, "gcd reduces common toy ratios");
   console.assert(fraction(96, 36) === "8:3", "fraction simplifies ratios");
@@ -465,8 +247,8 @@ function runTests(): void {
   });
   console.assert(curve.points.length === 301, "curve point count includes end point");
   console.assert(gearPath(20, 100, 100, 50).startsWith("M"), "gear path is valid SVG path data");
-  console.assert(buildGearBoundaryPath({ teeth: 24, cx: 0, cy: 0, pitchRadius: 120 }).startsWith("M"), "working gear boundary path is valid SVG path data");
   console.assert(evaluateMechanismSetup({ ringTeeth: 96, gearTeeth: 36, mode: "inside", penOffset: 0.5 }).status === "viable", "approved inside ratio validates");
+  console.assert(buildFabricationSvg({ ringTeeth: 84, gearTeeth: 35, mode: "inside", penOffset: 0.58 }).includes("<svg"), "fabrication export is valid SVG");
   console.assert(buildProductionDrawingSvg({ ringTeeth: 72, gearTeeth: 24, mode: "outside", penOffset: 0.48, inkColor: HOT }).includes("<svg"), "production drawing export is valid SVG");
 }
 

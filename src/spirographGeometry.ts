@@ -351,7 +351,8 @@ function toBody(points: Point[]): Body | null {
 
 function buildRingBodies(layout: MechanismLayout): Body[] {
   if (layout.mode === "outside") {
-    return [toBody(layout.ringBoundary)].filter((body): body is Body => body !== null);
+    const ringBody = toBody(layout.ringBoundary);
+    return ringBody ? [ringBody] : [];
   }
 
   const angles = unwrapAngles(layout.ringBoundary);
@@ -375,8 +376,8 @@ function buildRingBodies(layout: MechanismLayout): Body[] {
   return bodies;
 }
 
-export function evaluateMechanismSetup(input: LayoutInput): MechanismEvaluation {
-  if (input.mode === "inside" && input.gearTeeth >= input.ringTeeth) {
+function evaluateMechanismLayout(layout: MechanismLayout): MechanismEvaluation {
+  if (layout.mode === "inside" && layout.gearTeeth >= layout.ringTeeth) {
     return {
       status: "risk",
       label: "interference risk",
@@ -388,8 +389,20 @@ export function evaluateMechanismSetup(input: LayoutInput): MechanismEvaluation 
     };
   }
 
-  const layout = computeMechanismLayout(input);
   const ringBodies = buildRingBodies(layout);
+
+  if (ringBodies.length === 0) {
+    return {
+      status: "risk",
+      label: "interference risk",
+      detail: "Could not build validation geometry for the ring.",
+      penetration: Number.POSITIVE_INFINITY,
+      holeClearance: -1,
+      moduleSize: layout.moduleSize,
+      selectedHoleRadius: layout.selectedHoleRadius,
+    };
+  }
+
   const pitchAngle = (Math.PI * 2) / Math.max(layout.gearTeeth, 1);
   let bestPenetration = Number.POSITIVE_INFINITY;
   let bestCollisionCount = Number.POSITIVE_INFINITY;
@@ -399,7 +412,20 @@ export function evaluateMechanismSetup(input: LayoutInput): MechanismEvaluation 
     const rotatedGear = rotatePoints(layout.gearBoundary, angle);
     const translatedGear = translatePoints(rotatedGear, layout.meshDistance, 0);
     const gearBody = toBody(translatedGear);
-    const collisions = gearBody ? Query.collides(gearBody, ringBodies) : [];
+
+    if (!gearBody) {
+      return {
+        status: "risk",
+        label: "interference risk",
+        detail: "Could not build validation geometry for the rolling gear.",
+        penetration: Number.POSITIVE_INFINITY,
+        holeClearance: -1,
+        moduleSize: layout.moduleSize,
+        selectedHoleRadius: layout.selectedHoleRadius,
+      };
+    }
+
+    const collisions = Query.collides(gearBody, ringBodies);
     const penetration = collisions.reduce((maxDepth: number, collision: Collision) => Math.max(maxDepth, collision.depth ?? 0), 0);
 
     if (collisions.length < bestCollisionCount || (collisions.length === bestCollisionCount && penetration < bestPenetration)) {
@@ -430,6 +456,10 @@ export function evaluateMechanismSetup(input: LayoutInput): MechanismEvaluation 
   };
 }
 
+export function evaluateMechanismSetup(input: LayoutInput): MechanismEvaluation {
+  return evaluateMechanismLayout(computeMechanismLayout(input));
+}
+
 function measurementLine(x1: number, y1: number, x2: number, y2: number, label: string): string {
   const midX = (x1 + x2) / 2;
   const midY = (y1 + y2) / 2 - 2.2;
@@ -444,7 +474,7 @@ function measurementLine(x1: number, y1: number, x2: number, y2: number, label: 
 
 export function buildFabricationSvg(input: LayoutInput): string {
   const layout = computeMechanismLayout(input);
-  const evaluation = evaluateMechanismSetup(input);
+  const evaluation = evaluateMechanismLayout(layout);
   const ringExtent = layout.ringOuterRadius;
   const gearExtent = layout.gearPitchRadius + layout.moduleSize;
   const width = EXPORT_MECHANISM_MARGIN * 2 + ringExtent * 2 + EXPORT_MECHANISM_GAP + gearExtent * 2;
@@ -492,7 +522,7 @@ export function buildFabricationSvg(input: LayoutInput): string {
 
 export function buildProductionDrawingSvg(input: LayoutInput & { inkColor: string }): string {
   const layout = computeMechanismLayout(input);
-  const evaluation = evaluateMechanismSetup(input);
+  const evaluation = evaluateMechanismLayout(layout);
   const curvePoints = buildCurvePoints({ ...input, samples: 3600 });
   const bounds = curvePoints.reduce(
     (current, point) => ({
